@@ -85,9 +85,8 @@ public class TriangleCounterTask implements Runnable{
      */
     @Override
     public void run() {
-        // TODO:
-        // 1. Initialize local counter
-        // 2. Invoke RightTriangleCounter for assigned pivot range
-        // 3. Store result in partialCounts[resultIndex]
+        long count = RightTriangleCounter.countRightTriangles(points, startIndex, endIndex);
+
+        partialCounts[resultIndex] = count;
     }
 }

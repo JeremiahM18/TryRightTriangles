@@ -68,11 +68,25 @@ public class ThreadTriangles {
      * @throws IllegalArgumentException if thread count is invalid
      */
     private static int parseThreadCount(final String s){
-        // TODO:
-        // Parse integer
-        // Ensure > 0
-        // Throw IllegalArgumentException
-        return 0;
+        Objects.requireNonNull(s, "thread count string cannot be null");
+
+        final int threadCount;
+        try {
+            threadCount = Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "Thread count must be an integer: " + s,
+                    e
+            );
+        }
+
+        if (threadCount < 1) {
+            throw new IllegalArgumentException(
+                    "Thread count must be greater than zero: " + threadCount
+            );
+        }
+
+        return threadCount;
     }
 
     /**
