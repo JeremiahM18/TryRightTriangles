@@ -9,6 +9,8 @@
 package com.tryright;
 
 import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -47,16 +49,54 @@ public class ThreadTriangles {
     public static void main(final String[] args) {
         Objects.requireNonNull(args, "args cannot be null");
 
+        if (args.length != 2) {
+            System.err.println("Error: expected 2 arguments, got " + args.length);
+            printUsage();
+            System.exit(EXIT_BAD_ARGS);
+        }
+
+        final File inputFile = new File(args[0]);
+
+        final int threadCount;
+        try {
+            threadCount = parseThreadCount(args[1]);
+        } catch (IllegalArgumentException e) {
+            System.err.println("Error: " + e.getMessage());
+            printUsage();
+            System.exit(EXIT_BAD_ARGS);
+            return;     // unreachable, but documents control flow
+        }
+
+        final List<Point> points;
+        try {
+            points = loadPoints(inputFile);
+        } catch (IllegalArgumentException e) {
+            // loadPoints uses IllegalArgumentException for validation and format errors
+            System.err.println("Error: " + e.getMessage());
+            printUsage();
+            System.exit(EXIT_FORMAT_ERROR);
+            return;     // unreachable
+        }
+
+        if (points.isEmpty()) {
+            System.err.println("Error: input file contains no points");
+            System.exit(EXIT_FORMAT_ERROR);
+        }
+
         // TODO:
-        // 1. Validate argument count
-        // 2. Parse and validate thread count
-        // 3. Load points from file
         // 4. Partition work across threads
         // 5. Create TriangleCounterTask instances
         // 6. Start threads
         // 7. Join threads
         // 8. Aggregate partial results
         // 9. Print final count to stdout
+    }
+
+    /**
+     * Prints a usage message to stderr.
+     */
+    private static void printUsage() {
+        System.err.println("Usage: ThreadTriangles <input file> <num_threads>");
     }
 
     /**
