@@ -83,13 +83,49 @@ public class ThreadTriangles {
             System.exit(EXIT_FORMAT_ERROR);
         }
 
-        // TODO:
-        // 4. Partition work across threads
-        // 5. Create TriangleCounterTask instances
-        // 6. Start threads
-        // 7. Join threads
-        // 8. Aggregate partial results
-        // 9. Print final count to stdout
+        // Don't create more threads than there are pivot points
+        final int pivots = points.size();
+        final int actualThreads = Math.min(threadCount, pivots);
+
+        // Shared memory for results (one slot per thread).
+        final long[] partialCounts = new long[actualThreads];
+        final Thread[] threads = new Thread[actualThreads];
+
+        // Partition pivots into contiguous batches.
+        final int batchSize = (pivots + actualThreads - 1) / actualThreads;
+
+        int taskIndex = 0;
+        for (int i = 0; i < actualThreads; i++) {
+            final int start = i * batchSize;
+            if (start >= pivots) {
+                break;
+            }
+
+            final int end = Math.min(start + batchSize, pivots);
+
+            final TriangleCounterTask task =
+                    new TriangleCounterTask(points, start, end, partialCounts, taskIndex);
+
+            threads[taskIndex] = new Thread(task, "TriangleCounter-" + taskIndex);
+            threads[taskIndex].start();
+            taskIndex++;
+        }
+
+        // Join all threads and aggregate partial results
+        long total = 0;
+        for (int j = 0; j < taskIndex; j++) {
+            try {
+                threads[j].join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.err.println("Error: main thread interrupted while waiting for workers: "
+                        + e.getMessage());
+                System.exit(EXIT_IO_ERROR);
+            }
+            total += partialCounts[j];
+        }
+
+        System.out.println(total);
     }
 
     /**
@@ -138,11 +174,26 @@ public class ThreadTriangles {
      * @throws IllegalArgumentException if file is invalid or unreadable
      */
     private static List<Point> loadPoints(final File file){
-        // TODO:
-        // Validate file existence
-        // Delegate to PointsIO
-        // Exception Handling
-        return null;
-    }
+        Objects.requireNonNull(file, "file cannot be null");
 
+        if (!file.exists()) {
+            throw new IllegalArgumentException("input file does not exist: " + file);
+        }
+        if (!file.isFile()) {
+            throw new IllegalArgumentException("input file is not a file: " + file);
+        }
+        if (!file.canRead()) {
+            throw new IllegalArgumentException("input file cannot be read: " + file);
+        }
+
+        try {
+            return PointsIO.readPointsFromFile(file);
+        } catch (IOException e) {
+            // Treat as IO error; wrap as IllegalArgumentException so main can exit cleanly
+            throw new IllegalArgumentException("I/O error while reading file: " + e.getMessage(), e);
+        } catch (IllegalArgumentException e) {
+            // Format problems from PointsIO
+            throw new IllegalArgumentException("Invalid input format: " + e.getMessage(), e);
+        }
+    }
 }
