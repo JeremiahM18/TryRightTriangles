@@ -28,12 +28,12 @@ public class TriangleCounterTask implements Runnable{
     private final List<Point> points;
 
     /**
-     * Starting pivot index
+     * Starting pivot index (inclusive)
      */
     private final int startIndex;
 
     /**
-     * Ending pivot index
+     * Ending pivot index (exclusive)
      */
     private final int endIndex;
 
@@ -52,8 +52,8 @@ public class TriangleCounterTask implements Runnable{
      * Constructs a TriangleCounterTask.
      *
      * @param points shared list of points
-     * @param startIndex starting pivot index
-     * @param endIndex ending pivot index
+     * @param startIndex starting pivot index (inclusive)
+     * @param endIndex ending pivot index (exclusive)
      * @param partialCounts shared array for partial results
      * @param resultIndex index for this task's result
      *
@@ -70,7 +70,19 @@ public class TriangleCounterTask implements Runnable{
         this.points = Objects.requireNonNull(points, "points cannot be null");
         this.partialCounts = Objects.requireNonNull(partialCounts,  "partialCounts cannot be null");
 
-        // Parameter validation deferred to implementation phase
+        if (startIndex < 0) {
+            throw new IllegalArgumentException("startIndex must be non-negative");
+        }
+        if (endIndex < startIndex) {
+            throw new IllegalArgumentException("endIndex must be >= startIndex");
+        }
+        if (endIndex > points.size()) {
+            throw new IllegalArgumentException("endIndex exceeds points list size");
+        }
+        if (resultIndex < 0 || resultIndex >= partialCounts.length) {
+            throw new IllegalArgumentException("resultIndex out of bounds" +  resultIndex);
+        }
+
         this.startIndex = startIndex;
         this.endIndex = endIndex;
         this.resultIndex = resultIndex;
@@ -79,13 +91,14 @@ public class TriangleCounterTask implements Runnable{
     /**
      * Executes the triangle counting task.
      *
-     * <p>Implementation with count right triangles for pivot points
-     * in the range [startIndex, endIndex) and store result in
-     * partialCounts[resultIndex].</p>
+     * <p>Counts right triangles for pivot points in the range
+     * {@code [startIndex, endIndex)} and stores the result in
+     * {@code partialCounts[resultIndex]}.</p>
      */
     @Override
     public void run() {
-        long count = RightTriangleCounter.countRightTriangles(points, startIndex, endIndex);
+        final long count =
+                RightTriangleCounter.countRightTriangles(points, startIndex, endIndex);
 
         partialCounts[resultIndex] = count;
     }
