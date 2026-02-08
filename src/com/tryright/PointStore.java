@@ -1,3 +1,11 @@
+/****************************************
+ *
+ * Author: Jeremiah McDonald
+ * Assignment: Program 3
+ * Class: CSC-4180 Operating Systems
+ *
+ ***************************************/
+
 package com.tryright;
 
 /**
