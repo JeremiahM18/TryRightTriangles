@@ -13,13 +13,13 @@ import java.util.Scanner;
 /**
  * Entry point for single-process right triangle counting.
  *
- * <p>This class program operates in two modes:</>
+ * <p>This class program operates in two modes:</p>
  * <ul>
- *     <li><b>Normal mode:</b> {@code <filename>}}</li>
+ *     <li><b>Normal mode:</b> {@code <filename>}</li>
  *     <li><b>Child mode:</b> {@code --child <startInclusive> <endExclusive>}</li>
  * </ul>
  *
- * <p><In normal mode, points are loaded through the {@link PointStore}
+ * <p>In normal mode, points are loaded through the {@link PointStore}
  * abstraction and the total number of right triangles is printed.</p>
  *
  * <p>In child mode, points are read from {@code stdin} and only a subset

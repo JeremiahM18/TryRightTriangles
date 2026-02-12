@@ -36,7 +36,7 @@ public final class RightTriangleCounter {
     }
 
     /**
-     * Counts the total number or right triangles using a {@link PointStore}.
+     * Counts the total number of right triangles using a {@link PointStore}.
      *
      * <p>Each point is treated as a potential right-angle vertex.</p>
      *
@@ -45,7 +45,7 @@ public final class RightTriangleCounter {
      * @throws NullPointerException if {@code store} is {@code null}
      */
     public static long countRightTriangles(final PointStore store) {
-        Objects.requireNonNull(store, "points cannot be null.");
+        Objects.requireNonNull(store, "store cannot be null.");
         return countRightTriangles(store, 0, store.numPoints());
     }
 
@@ -232,7 +232,7 @@ public final class RightTriangleCounter {
      *
      * @param a first non-negative integer
      * @param b second non-negative integer
-     * @return {@code gcd(a. b)}, or 1 if both are 0
+     * @return {@code gcd(a, b)}, or 1 if both are 0
      */
     private static int gcd(int a, int b) {
         while (b != 0) {
