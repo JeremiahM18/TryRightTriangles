@@ -1,59 +1,72 @@
 /*************************************
  * Author: Jeremiah McDonald
- * Assignment: Program 1
+ * Assignment: Program 3
  * Class: CSC-4180 Operating Systems
  *************************************/
 
 package com.tryright;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
 import java.util.Scanner;
 
 /**
- * Single-process right triangle counter.
+ * Entry point for single-process right triangle counting.
  *
- * <p>This class can also act as a child process when invoked using
- * {@code --child <startInclusive> <endExclusive>}.</p>
+ * <p>This class program operates in two modes:</>
+ * <ul>
+ *     <li><b>Normal mode:</b> {@code <filename>}}</li>
+ *     <li><b>Child mode:</b> {@code --child <startInclusive> <endExclusive>}</li>
+ * </ul>
+ *
+ * <p><In normal mode, points are loaded through the {@link PointStore}
+ * abstraction and the total number of right triangles is printed.</p>
+ *
+ * <p>In child mode, points are read from {@code stdin} and only a subset
+ * of pivot indices are evaluated. This mode is intended for use by
+ * {@code ProcessTriangles}.</p>
+ *
+ * <p>This class is not instantiable.</p>
  *
  * @author Jeremiah McDonald
  */
 public final class Triangles {
 
     /**
-     * Exit code used when command-line parameters are invalid.
+     * Exit code for invalid command-line arguments.
      */
     private static final int EXIT_BAD_ARGS = 1;
 
     /**
-     * Exit code used when file input fails.
-     */
-    private static final int EXIT_IO_ERROR = 2;
-
-    /**
-     * Exit code used when the point file format is invalid.
+     * Exit code for invalid point file format.
      */
     private static final int EXIT_FORMAT_ERROR = 3;
 
     /**
-     * Exit code used when child arguments or execution are invalid.
+     * Exit code for invalid child execution parameters.
      */
     private static final int EXIT_CHILD_ERROR = 4;
 
     /**
-     * Prints the expected command-line parameters to {@code stderr}.
+     * Prevents instantiation.
      */
-    private static void printUsage(){
-        System.err.println("Parameter(s): <filename>");
+    private Triangles() {
+        // Utility class
     }
 
     /**
-     * Prints the expected parameter usage format for child mode to {@code stderr}.
+     * Prints the normal mode usage information to {@code stderr}.
+     */
+    private static void printUsage(){
+
+        System.err.println("Usage: <filename>");
+    }
+
+    /**
+     * Prints child mode usage information to {@code stderr}.
      */
     private static void printChildUsage(){
-        System.err.println("Parameter(s): --child <startInclusive> <endExclusive>");
+        System.err.println("Usage: --child <startInclusive> <endExclusive>");
     }
 
     /**
@@ -68,16 +81,19 @@ public final class Triangles {
      *     <li>{@code endExclusive}</li>
      * </ul>
      *
-     * @param args command-line arguments
+     * @param args command-line arguments (must not be {@code null})
      */
     public static void main(final String[] args) {
+
         Objects.requireNonNull(args, "args cannot be null");
 
+        // Child mode detection
         if (args.length >= 1 && "--child".equals(args[0])) {
             runChild(args);
             return;
         }
 
+        // Normal mode requires exactly one argument
         if (args.length != 1) {
             System.err.println("Error: expected exactly 1 parameter.");
             printUsage();
@@ -85,37 +101,41 @@ public final class Triangles {
             return;
         }
 
-        final File file = new File(args[0]);
-        final List<Point> points;
+        final String filename = args[0];
+        final PointStore store;
 
+        // Open point store
         try {
-            points = PointsIO.readPointsFromFile(file);
-        } catch (IOException e) {
-            System.err.println("Error: " + e.getMessage());
-            System.exit(EXIT_IO_ERROR);
-            return;
+            store = PointStoreFactory.open(filename);
         } catch (IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
             System.exit(EXIT_FORMAT_ERROR);
             return;
         }
 
-        final long answer = RightTriangleCounter.countRightTriangles(points);
-        System.out.println(answer);
+        // Perform computation
+        try {
+            final long answer =
+                    RightTriangleCounter.countRightTriangles(store);
+            System.out.println(answer);
+        } finally {
+            store.close();
+        }
     }
 
     /**
-     * Runs in child mode.
+     * Executes child mode.
      *
-     * <p>The child process reads the full point list from {@code stdin}, counts right triangles
-     * for pivot indices in {@code [startInclusive, endExclusive)}, and prints the partial count
-     * to {@code stdout}.</p>
+     * <p>Reads points from {@code stdin}, evaluates pivot indices in the range
+     * {@code [startInclusive, endExclusive)}, and prints the partial result.</p>
      *
-     * @param args expected parameters: {@code --child startInclusive endExclusive}
+     * @param args expected format:
+     *             {@code --child <startInclusive> <endExclusive>}
      */
     private static void runChild(final String[] args) {
+
         if (args.length != 3) {
-            System.err.println("Error: bad child parameters.");
+            System.err.println("Error: invalid child parameters.");
             printChildUsage();
             System.exit(EXIT_CHILD_ERROR);
             return;
@@ -135,6 +155,7 @@ public final class Triangles {
         }
 
         final List<Point> points;
+
         try (Scanner scanner = new Scanner(System.in, "US-ASCII")) {
             points = PointsIO.readPointsFromScanner(scanner);
         } catch (final IllegalArgumentException e){
@@ -144,7 +165,8 @@ public final class Triangles {
         }
 
         try {
-            final long partial = RightTriangleCounter.countRightTriangles(points, start, end);
+            final long partial =
+                    RightTriangleCounter.countRightTriangles(points, start, end);
             System.out.println(partial);
         } catch (final IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
