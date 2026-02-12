@@ -79,11 +79,11 @@ public final class ProcessTriangles {
         try {
             count = Integer.parseInt(arg);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("numProcesses must be an integer");
+            throw new IllegalArgumentException("numProcesses must be an integer.");
         }
 
         if (count <= 0) {
-            throw new IllegalArgumentException("numProcesses must be a positive integer");
+            throw new IllegalArgumentException("numProcesses must be a positive integer.");
         }
 
         return count;
@@ -124,7 +124,7 @@ public final class ProcessTriangles {
      */
     public static void main(final String[] args) {
 
-        Objects.requireNonNull(args, "args cannot be null");
+        Objects.requireNonNull(args, "args cannot be null.");
 
         if (args.length != 2) {
             System.err.println("Error: expected exactly 2 parameters.");
