@@ -1,7 +1,7 @@
 /*************************************
  *
  * Author: Jeremiah McDonald
- * Assignment: Program 1
+ * Assignment: Program 3
  * Class: CSC-4180 Operating Systems
  *
  *************************************/
@@ -10,7 +10,6 @@ package com.tryright;
 
 import java.io.BufferedReader;
 import java.io.PrintWriter;
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
@@ -19,41 +18,59 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Multiprocess right triangle counter using {@link ProcessBuilder} and pipes
- * for Inter-Process Communication (IPC).
+ * Multiprocess right triangle counter using {@link ProcessBuilder}
+ * and pipes for Inter-Process Communication (IPC).
  *
- * <p>This program reads points from an input file, spawns multiple child processes,
- * and sums their partial triangle counts into the final answer.</p>
+ * <p>This program:</p>
+ * <ul>
+ *     <li>Loads points through the {@link PointStore} abstraction</li>
+ *     <li>Partitions pivot indices across multiple child JVM processes</li>
+ *     <li>Streams point data to each child via {@code stdin}</li>
+ *     <li>Aggregates partial triangle counts from child {@code stdout}</li>
+ * </ul>
+ *
+ * <p>Each child process executes {@link Triangles} in {@code --child} mode.</p>
+ *
+ * <p>This class is not instantiable.</p>
  *
  * @author Jeremiah McDonald
  */
 public final class ProcessTriangles {
 
     /**
-     * Exit code used when the command-line parameters are invalid.
+     * Exit code for invalid command-line parameters.
      */
     private static final int EXIT_BAD_ARGS = 1;
+
     /**
-     * Exit code used for failures related to reading the input file.
+     * Exit code for I/O-related failures.
      */
     private static final int EXIT_IO_ERROR = 2;
+
     /**
-     * Exit code used when the input file format is invalid.
+     * Exit code for invalid input format.
       */
     private static final int EXIT_FORMAT_ERROR = 3;
 
     /**
-     * Prints the expected command-line parameters to {@code stderr}.
+     * Prevents instantiation.
      */
-    private static void printUsage() {
-        System.err.println("Parameter(s): <filename> <numProcesses>");
+    private ProcessTriangles() {
+        // Utility class
     }
 
     /**
-     * Parses and validates the process count argument.
+     * Prints usage information to {@code stderr}.
+     */
+    private static void printUsage() {
+        System.err.println("Usage: <filename> <numProcesses>");
+    }
+
+    /**
+     * Parses and validates the number of child processes.
      *
-     * @param arg the command-line argument representing the process count
-     * @return validated positive integer process count
+     * @param arg string representation of process count
+     * @return validated positive process count
      * @throws IllegalArgumentException if the argument is invalid
      */
     private static int parseProcessCount(final String arg) {
@@ -73,21 +90,18 @@ public final class ProcessTriangles {
     }
 
     /**
-     * Partitions a range of indices {@code [0, total)} into contiguous blocks
-     * based on the number of processes.
+     * Partitions pivot indices {@code [0, total)} into contiguous ranges.
      *
-     * <p>Each block represents the subset of outer-loop indices that a single
-     * child process will be responsible for. The final block may be smaller
-     * if {@code total} is not evenly divisible by {@code numProcesses}.</p>
+     * <p>Each returned row represents a half-open interval
+     * {@code [startInclusive, endExclusive)}.</p>
      *
-     * <p>Ranges are half-open: {@code [start, end)} where {@code end} is exclusive.</p>
-     *
-     * @param total total number of work items
-     * @param numProcesses number of processes to partition the work across
-     * @return a 2D array where each row is {@code [startIndex, endIndex)}
+     * @param total total number of pivot indices
+     * @param numProcesses number of processes
+     * @return a 2D array of index ranges
      */
     private static int[][] partitionIndices(int total, int numProcesses) {
-        int[][] ranges = new int[numProcesses][2];
+
+        final int[][] ranges = new int[numProcesses][2];
 
         // Compute ceiling(total / numProcesses) to evenly distribute work
         int boxSize = (total + numProcesses - 1) / numProcesses;
@@ -95,7 +109,6 @@ public final class ProcessTriangles {
         for (int i = 0; i < numProcesses; i++) {
             int start = i * boxSize;
             int end = Math.min(start + boxSize, total);
-
             ranges[i][0] = start;
             ranges[i][1] = end;
         }
@@ -106,15 +119,11 @@ public final class ProcessTriangles {
     /**
      * Program entry point.
      *
-     * <p>Parameters:</p>
-     * <ul>
-     *     <li>{@code args[0]}: input filename containing points</li>
-     *     <li>{@code args[1]}: number of child processes to spawn</li>
-     * </ul>
-     *
-     * @param args command-line arguments
+     * @param args command-line arguments:
+     *             {@code <filename> <numProcesses>}
      */
     public static void main(final String[] args) {
+
         Objects.requireNonNull(args, "args cannot be null");
 
         if (args.length != 2) {
@@ -124,7 +133,6 @@ public final class ProcessTriangles {
             return;
         }
 
-        final File file = new File(args[0]);
         final int numProcesses;
 
         try{
@@ -140,12 +148,14 @@ public final class ProcessTriangles {
             // Parent reads list of points once
             // The point list is immutable after this and shared with children
             // by streaming its contents through stdin.
-            final List<Point> points = PointsIO.readPointsFromFile(file);
+            final PointStore store = PointStoreFactory.open(args[0]);
+
+            try {
 
             // Partition the outer-loop pivot indices [0, points.size())
             // into contiguous ranges so each child process is responsible
             // for a disjoint subset of triangle computations.
-            final int[][] ranges = partitionIndices(points.size(), numProcesses);
+            final int[][] ranges = partitionIndices(store.numPoints(), numProcesses);
 
             // Maintain references to child processes and their stdout streams
             // so parent can collect partial results deterministically.
@@ -167,7 +177,8 @@ public final class ProcessTriangles {
 
                 // Create a new JVM process executing the Triangles class
                 // with arguments specifying the index range it is responsible for.
-                final ProcessBuilder processBuilder = new ProcessBuilder(
+                final ProcessBuilder processBuilder =
+                        new ProcessBuilder(
                         "java",
                         "-cp",
                         classPath,
@@ -179,6 +190,7 @@ public final class ProcessTriangles {
 
                 // Redirect child stderr to parent stderr for visibility of errors.
                 processBuilder.redirectError(ProcessBuilder.Redirect.INHERIT);
+
                 final Process process = processBuilder.start();
                 processes.add(process);
 
@@ -187,7 +199,9 @@ public final class ProcessTriangles {
                 // only processes its assigned index range
                 try (PrintWriter writer =
                              new PrintWriter(new OutputStreamWriter(process.getOutputStream()))) {
-                    PointsIO.writePoints(points, writer);
+                    for (int j = 0; j < store.numPoints(); j++) {
+                        writer.println(store.getX(j) + " " + store.getY(j));
+                    }
                 }
 
                 // Capture the child's stdout so the parent can read
@@ -202,9 +216,10 @@ public final class ProcessTriangles {
 
             for (BufferedReader reader : readers) {
                 final String line = reader.readLine();
-                if(line == null){
+                if (line == null) {
                     throw new IOException("Child process produced no output");
                 }
+
                 total += Long.parseLong(line.trim());
             }
 
@@ -215,6 +230,10 @@ public final class ProcessTriangles {
 
             // The final aggregated triangle count to stdout.
             System.out.println(total);
+
+        } finally {
+            store.close();
+        }
 
         } catch (IOException e) {
             System.err.println("Error: " + e.getMessage());
