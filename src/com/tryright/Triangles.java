@@ -6,6 +6,7 @@
 
 package com.tryright;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Scanner;
@@ -129,6 +130,8 @@ public final class Triangles {
      * <p>Reads points from {@code stdin}, evaluates pivot indices in the range
      * {@code [startInclusive, endExclusive)}, and prints the partial result.</p>
      *
+     * <p>Points are stored in memory and accessed via the PointStore interface.</p>
+     *
      * @param args expected format:
      *             {@code --child <startInclusive> <endExclusive>}
      */
@@ -154,23 +157,84 @@ public final class Triangles {
             return;
         }
 
-        final List<Point> points;
+        final ArrayList<Integer> xs = new ArrayList<>();
+        final ArrayList<Integer> ys = new ArrayList<>();
 
         try (Scanner scanner = new Scanner(System.in, "US-ASCII")) {
-            points = PointsIO.readPointsFromScanner(scanner);
+
+            while (scanner.hasNext()) {
+                if (!scanner.hasNextInt()) {
+                    throw new IllegalArgumentException("Invalid input: expected integer");
+                }
+                int x = scanner.nextInt();
+
+                if (!scanner.hasNextInt()) {
+                    throw new IllegalArgumentException("Invalid input: expected integer");
+                }
+                int y = scanner.nextInt();
+
+                xs.add(x);
+                ys.add(y);
+            }
         } catch (final IllegalArgumentException e){
             System.err.println("Error: " + e.getMessage());
             System.exit(EXIT_FORMAT_ERROR);
             return;
         }
 
+        final PointStore store = new InMemoryPointStore(xs, ys);
+
         try {
             final long partial =
-                    RightTriangleCounter.countRightTriangles(points, start, end);
+                    RightTriangleCounter.countRightTriangles(store, start, end);
             System.out.println(partial);
         } catch (final IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
             System.exit(EXIT_CHILD_ERROR);
+        }
+    }
+
+    /**
+     * Lightweight in-memory {@link PointStore} implementation used by
+     * child process execution.
+     *
+     * <p>This avoids temporary files and allows point data received via
+     * stdin to be processed through the PointStore abstraction.</p>
+     */
+    private static final class InMemoryPointStore implements PointStore {
+
+        private final int[] xs;
+        private final int[] ys;
+
+        InMemoryPointStore(List<Integer> xsList, List<Integer> ysList) {
+            xs = new int[xsList.size()];
+            ys = new int[ysList.size()];
+
+            // Copy values into arrays to reduce memory overhead
+            for (int i = 0; i < xs.length; i++) {
+                xs[i] = xsList.get(i);
+                ys[i] = ysList.get(i);
+            }
+        }
+
+        @Override
+        public int getX(int idx) {
+            return xs[idx];
+        }
+
+        @Override
+        public int getY(int idx) {
+            return ys[idx];
+        }
+
+        @Override
+        public int numPoints() {
+            return xs.length;
+        }
+
+        @Override
+        public void close() {
+            // nothing to release
         }
     }
 }
