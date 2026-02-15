@@ -41,6 +41,9 @@ public final class TextPointStore implements PointStore {
      * Once created, the store provides read-only access to the
      * parsed point data.</p>
      *
+     * <p>This implementation loads all points into memory to provide
+     * fast indexed access during triangle counting.</p>
+     *
      * @param filename path to the text-encoded point file
      * @throws IllegalArgumentException if filename is null, unreadable
      *                                  or contains malformed data.
@@ -52,7 +55,7 @@ public final class TextPointStore implements PointStore {
 
         /*
          * Temporary lists allow dynamic growth while parsing the file.
-         * Data is copies into fixed-size arrays after validation.
+         * Data is copied into fixed-size arrays after validation.
          */
         final List<Integer> xList = new ArrayList<>();
         final List<Integer> yList = new ArrayList<>();
@@ -103,7 +106,11 @@ public final class TextPointStore implements PointStore {
     }
 
     /**
-     * {@inheritDoc}
+     * Returns the X coordinate of the point at the specified index
+     *
+     * @param idx index of the point
+     * @return X coordinate
+     * @throws IndexOutOfBoundsException if idx is outside valid range
      */
     @Override
     public int getX(final int idx){
@@ -112,7 +119,11 @@ public final class TextPointStore implements PointStore {
     }
 
     /**
-     * {@inheritDoc}
+     * Returns the Y coordinate of the point at the specified index.
+     *
+     * @param idx index of the point
+     * @return Y coordinate
+     * @throws IndexOutOfBoundsException if idx is outside valid range
      */
     @Override
     public int getY(final int idx){
@@ -121,7 +132,7 @@ public final class TextPointStore implements PointStore {
     }
 
     /**
-     * {@inheritDoc}
+     * Returns the number of points stored in the data stare
      */
     @Override
     public int numPoints() {
@@ -129,7 +140,9 @@ public final class TextPointStore implements PointStore {
     }
 
     /**
-     * {@inheritDoc}
+     * Releases any system resources associated with this store.
+     *
+     * <p>No resources need to be released for text implementation.</p>
      */
     @Override
     public void close() {
@@ -137,14 +150,14 @@ public final class TextPointStore implements PointStore {
     }
 
     /**
-     * Validate the index is within bounds.
+     * Validate the index is within the valid range.
      *
      * @param idx index to validate
      * @throws IndexOutOfBoundsException if index is out of range
      */
     private void checkIndex(final int idx) {
         if (idx < 0 || idx >= xs.length) {
-            throw new IndexOutOfBoundsException("Index out of range: " + idx);
+            throw new IndexOutOfBoundsException("Index " + idx + " out of bounds");
         }
     }
 }

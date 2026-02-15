@@ -37,7 +37,7 @@ public class BinPointStore implements PointStore {
     /**
      * Number of bytes per point (x, y).
      */
-    private static final int POINTS_BYTES = 8;
+    private static final int POINT_BYTES = 8;
 
     /**
      * Memory-mapped buffer for file contents.
@@ -88,9 +88,9 @@ public class BinPointStore implements PointStore {
 
             long fileSize = fileChannel.size();
 
-            if (fileSize % POINTS_BYTES != 0) {
+            if (fileSize % POINT_BYTES != 0) {
                 throw new  IllegalArgumentException(
-                        "Invalid binary point file: size not multiple of " + POINTS_BYTES + " bytes");
+                        "Invalid binary point file: size not multiple of " + POINT_BYTES + " bytes");
             }
 
             if (fileSize > Integer.MAX_VALUE) {
@@ -99,8 +99,10 @@ public class BinPointStore implements PointStore {
                 );
             }
 
-            pointCount = (int) (fileSize /  POINTS_BYTES);
+            pointCount = (int) (fileSize /  POINT_BYTES);
 
+            // Memory-Map the entire file for fast random access and OS-level caching.
+            // Avoids copying file contents into the JVM heap and improves performance for large datasets
             mappedByteBuffer = fileChannel.map(
                     FileChannel.MapMode.READ_ONLY,
                     0,
@@ -121,7 +123,7 @@ public class BinPointStore implements PointStore {
     @Override
     public int getX(final int idx) {
         checkIndex(idx);
-        int position = idx * POINTS_BYTES;
+        int position = idx * POINT_BYTES;
         return mappedByteBuffer.getInt(position);
     }
 
@@ -129,18 +131,20 @@ public class BinPointStore implements PointStore {
      * Returns the Y coordinate of the point at the specified index.
      *
      * @param idx index of the point
-     * @return X coordinate
+     * @return Y coordinate
      * @throws IndexOutOfBoundsException if idx is invalid
      */
     @Override
     public int getY(final int idx) {
         checkIndex(idx);
-        int position = idx * POINTS_BYTES + INT_BYTES;
+        int position = idx * POINT_BYTES + INT_BYTES;
         return mappedByteBuffer.getInt(position);
     }
 
     /**
-     * Returns the nuber of points stores in the file.
+     * Returns the number of points stores in the file.
+     *
+     * @return number of points available
      */
     @Override
     public int numPoints() {
@@ -161,7 +165,7 @@ public class BinPointStore implements PointStore {
     }
 
     /**
-     * Validates index bounds.
+     * Validates index is within the valid range.
      */
     private void checkIndex (final int idx) {
         if (idx < 0 || idx >= pointCount) {
