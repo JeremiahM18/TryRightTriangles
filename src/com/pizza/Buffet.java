@@ -1,3 +1,11 @@
+/****************************************
+ *
+ * Author: Jeremiah McDonald
+ * Assignment: Program 4
+ * Class: CSC-4180 Operating Systems
+ *
+ ***************************************/
+
 package com.pizza;
 
 import java.util.List;
