@@ -20,7 +20,7 @@ import java.util.List;
  * to coordinate server and patron threads.</p>
  *
  * <p>All shared state is protected by the monitor of this object.
- * At all times, the nuber of slices on the buffet remains between
+ * At all times, the number of slices on the buffet remains between
  * 0 and maxSlices inclusive.</p>
  */
 public class BuffetMonitor implements Buffet {
