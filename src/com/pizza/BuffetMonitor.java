@@ -77,7 +77,7 @@ public class BuffetMonitor implements Buffet {
      * @param desired the number of slices requested
      * @return a list containing exactly {@code desired} slices in
      *          FIFO order, or null if the buffet has been closed
-     * @throws IllegalArgumentException if desired is negative
+     * @throws IllegalArgumentException if desired is < 0 or desired > maxSlices
      */
     @Override
     public synchronized List<SliceType> TakeAny(final int desired){
@@ -99,7 +99,7 @@ public class BuffetMonitor implements Buffet {
      * @param desired the number of vegetarian slices requested
      * @return a list containing exactly {@code desired} vegetarian slices
      *          in FIFO order, or null if the buffet has been closed
-     * @throws IllegalArgumentException if desired is < 0 or desired > maxSlices</>
+     * @throws IllegalArgumentException if desired is < 0 or desired > maxSlices
      */
     @Override
     public synchronized List<SliceType> TakeVeg(final int desired){
@@ -158,10 +158,54 @@ public class BuffetMonitor implements Buffet {
      */
     @Override
     public synchronized boolean AddPizza(final int count, final SliceType sType) {
-        // TODO: validate parameters
-        // TODO: add slices up to capacity; block if remaining slices cannot be added yet
-        // TODO: return false if closed occurs before completion
-        return false;
+        if (count < 0) {
+            throw new IllegalArgumentException("count must be >= 0.");
+        }
+        if (sType == null) {
+            throw new NullPointerException("sType must not be null.");
+        }
+        if (closed) {
+            return false;
+        }
+        if (count == 0){
+            return true;
+        }
+
+        int remaining = count;
+
+        while (remaining > 0) {
+            // If closed at any point, stop immediately
+            if (closed) {
+                return false;
+            }
+
+            // Add as many as possible
+            while (!closed && remaining > 0 && buffet.size() < maxSlices) {
+                buffet.addLast(sType);      // newest goes to tail; oldest remains at head
+                remaining--;
+            }
+
+            // wake any waiting takers
+            notifyAll();
+
+            // If done, return success
+            if (remaining == 0) {
+                return true;
+            }
+
+            // Not done, but buffer is full; block until space or close
+            while (!closed && buffet.size() >= maxSlices) {
+                try {
+                    wait();
+                } catch (final InterruptedException ignored) {
+                    // Per interface: handle interrupts internally; continue waiting
+                }
+            }
+
+            // Loop repeats: either space exists or closed == true
+        }
+
+        return true;
     }
 
     /**
@@ -178,9 +222,11 @@ public class BuffetMonitor implements Buffet {
      */
     @Override
     public synchronized void close() {
-        // TODO: set closed to true
-        // TODO: notifyAll waiting threads
-
+        if (closed) {
+            return;
+        }
+        closed = true;
+        notifyAll();
     }
 
     /**
