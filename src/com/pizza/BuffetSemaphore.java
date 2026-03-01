@@ -162,7 +162,6 @@ public class BuffetSemaphore implements Buffet {
      *     <li>Future calls must not block.</li>
      * </ul>
      * </p>
-     *
      */
     @Override
     public void close() {
