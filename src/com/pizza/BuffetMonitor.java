@@ -9,6 +9,7 @@
 package com.pizza;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 
@@ -98,15 +99,47 @@ public class BuffetMonitor implements Buffet {
      * @param desired the number of vegetarian slices requested
      * @return a list containing exactly {@code desired} vegetarian slices
      *          in FIFO order, or null if the buffet has been closed
-     * @throws IllegalArgumentException if desired is negative
+     * @throws IllegalArgumentException if desired is < 0 or desired > maxSlices</>
      */
     @Override
     public synchronized List<SliceType> TakeVeg(final int desired){
-        // TODO: validate desired
-        // TODO: increment waitingVeg before blocking; decrement after unblocking
-        // TODO: block until desired veg slices available or closed
-        // TODO: return slices in FIFO order
-        return null;
+        if (desired < 0 || desired > maxSlices) {
+            throw new IllegalArgumentException("desired must be between 0 and " + maxSlices + ".");
+        }
+        if (closed) {
+            return null;
+        }
+        if (desired == 0) {
+            return new ArrayList<>(0);
+        }
+
+        waitingVeg++;
+        try {
+            while (!closed && countVegOnBuffet() < desired) {
+                try {
+                    wait();
+                } catch (InterruptedException ignored) {
+                    // Per interface: handle interrupts internally; continue waiting
+                }
+            }
+
+            if (closed) {
+                return null;
+            }
+
+            // Remove the oldest vegetarian slices (FIFO among veg)
+            final List<SliceType> result = new ArrayList<>(desired);
+            removeOldestVegSlices(desired, result);
+
+            // Removed slices, space available for servers
+            notifyAll();
+
+            return result;
+        } finally {
+            waitingVeg--;
+            // waitingVeg affects TakeAny eligibility; wake everyone
+            notifyAll();
+        }
     }
 
     /**
@@ -148,5 +181,52 @@ public class BuffetMonitor implements Buffet {
         // TODO: set closed to true
         // TODO: notifyAll waiting threads
 
+    }
+
+    /**
+     * Counts vegetarian slices currently on the buffet without modifying it.
+     *
+     * @return number of vegetarian slices on the buffet
+     */
+    private int countVegOnBuffet() {
+        int count = 0;
+        for (final SliceType s : buffet) {
+            if (s.isVeg()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Removes the oldest vegetarian slices from the buffet and appends them to out.
+     *
+     * <p>This preserves overall buffet order for remaining slices and ensures the
+     * returned vegetarian slices are in oldest-first order among vegetarian slices.</p>
+     *
+     * @param desired number of vegetarian slices to remove
+     * @param out list to append removed slices into
+     */
+    private void removeOldestVegSlices(final int desired, final List<SliceType> out) {
+        int remaining = desired;
+
+        // Preserve FIFO of all slices, pull out veg slices, and rebuild the deque for non-removed slices
+        final Deque<SliceType> rebuilt = new ArrayDeque<>(buffet.size());
+
+        while (!buffet.isEmpty()) {
+            final SliceType s = buffet.removeFirst();
+            if (remaining > 0 && s.isVeg()) {
+                out.add(s);
+                remaining--;
+            } else {
+                rebuilt.addLast(s);
+            }
+        }
+
+        buffet.addAll(rebuilt);
+
+        if (remaining != 0) {
+            throw new IllegalStateException("Internal error: insufficient veg slices despite check.");
+        }
     }
 }
