@@ -15,9 +15,12 @@ import java.util.List;
 /**
  * Monitor-style (synchronized) implementation of the Buffet interface.
  *
- * <p>This implementation uses Java's intrinsic synchronization
- * (synchronized methods) along with wait() and notifyAll()
- * to coordinate server and patron threads.</p>
+ * <p>This class coordinates server threads (adding slices) and patron
+ * threads (taking slices) using Java's intrinsic synchronization
+ * (synchronized methods) along with wait() and notifyAll().</p>
+ *
+ * <p>The buffet is modeled as a FIFO queue where the oldest slice is
+ * removed first (oldest slice at the head).</p>
  *
  * <p>All shared state is protected by the monitor of this object.
  * At all times, the number of slices on the buffet remains between
@@ -26,7 +29,7 @@ import java.util.List;
 public class BuffetMonitor implements Buffet {
 
     /**
-     * Maximum number of slices allowed on the buffet.
+     * Maximum number of slices allowed on the buffet at any time.
      */
     private final int maxSlices;
 
@@ -80,6 +83,7 @@ public class BuffetMonitor implements Buffet {
         // TODO: validate desired
         // TODO: block until desired eligible slices available or closed
         // TODO: enforce vegetarian priority rule
+        // TODO: return slices in FIFO order
         return null;
     }
 
@@ -99,8 +103,9 @@ public class BuffetMonitor implements Buffet {
     @Override
     public synchronized List<SliceType> TakeVeg(final int desired){
         // TODO: validate desired
-        // TODO: increment waitingVeg before blocking
+        // TODO: increment waitingVeg before blocking; decrement after unblocking
         // TODO: block until desired veg slices available or closed
+        // TODO: return slices in FIFO order
         return null;
     }
 
@@ -121,8 +126,8 @@ public class BuffetMonitor implements Buffet {
     @Override
     public synchronized boolean AddPizza(final int count, final SliceType sType) {
         // TODO: validate parameters
-        // TODO: add as  many as possible
-        // TODO: block for remaining slices if necessary
+        // TODO: add slices up to capacity; block if remaining slices cannot be added yet
+        // TODO: return false if closed occurs before completion
         return false;
     }
 
