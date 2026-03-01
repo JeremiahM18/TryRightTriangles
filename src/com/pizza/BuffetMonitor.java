@@ -81,11 +81,33 @@ public class BuffetMonitor implements Buffet {
      */
     @Override
     public synchronized List<SliceType> TakeAny(final int desired){
-        // TODO: validate desired
-        // TODO: block until desired eligible slices available or closed
-        // TODO: enforce vegetarian priority rule
-        // TODO: return slices in FIFO order
-        return null;
+        if (desired < 0 || desired > maxSlices) {
+            throw new IllegalArgumentException("desired must be between 0 and " + maxSlices + ".");
+        }
+        if (closed) {
+            return null;
+        }
+        if (desired == 0) {
+            return new ArrayList<>(0);
+        }
+
+        while (!closed && countEligibleAnySlices() < desired) {
+            try {
+                wait();
+            } catch (final InterruptedException ignored) {
+                // Per interface: handle interrupts internally; continue waiting
+            }
+        }
+
+        if (closed) {
+            return null;
+        }
+
+        final List<SliceType> result = new ArrayList<>(desired);
+        removeOldestEligibleAnySlices(desired, result);
+
+        notifyAll();
+        return result;
     }
 
     /**
@@ -273,6 +295,56 @@ public class BuffetMonitor implements Buffet {
 
         if (remaining != 0) {
             throw new IllegalStateException("Internal error: insufficient veg slices despite check.");
+        }
+    }
+
+    /**
+     * Counts slices currently eligible for TakeAny based on vegetarian waiters.
+     *
+     * @return number of eligible slices
+     */
+    private int countEligibleAnySlices() {
+        final boolean vegRestricted = waitingVeg > 0;
+
+        int count = 0;
+        for (final SliceType s : buffet) {
+            if (!vegRestricted || !s.isVeg()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Removes the oldest eligible slices for TakeAny and appends them to out.
+     *
+     * <p>If vegetarians are waiting, only non-veg slices are eligible.</p>
+     *
+     * @param desired number of slices to remove
+     * @param out list to append removed slices into
+     */
+    private void removeOldestEligibleAnySlices(final int desired, final List<SliceType> out) {
+        int remaining = desired;
+        final boolean  vegRestricted = waitingVeg > 0;
+
+        final Deque<SliceType> rebuilt = new ArrayDeque<>(buffet.size());
+
+        while (!buffet.isEmpty()) {
+            final SliceType s = buffet.removeFirst();
+            final boolean eligible = !vegRestricted || !s.isVeg();
+
+            if (remaining > 0 && eligible) {
+                out.add(s);
+                remaining--;
+            } else {
+                rebuilt.addLast(s);
+            }
+        }
+
+        buffet.addAll(rebuilt);
+
+        if (remaining != 0) {
+            throw new IllegalStateException("Internal error: insufficient eligible slices despite check.");
         }
     }
 }
