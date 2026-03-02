@@ -24,14 +24,14 @@ import java.util.concurrent.atomic.AtomicReference;
  *     <li>close() unblocking and return semantics</li>
  * </ul>
  *
- * <p>To test a different implementation, change exactly one line in {@code main}
+ * <p>To test a different implementation, change exactly one line in {@link #createBuffet(int)}
  * to select {@code BuffetMonitor}, {@code BuffetSemaphore}, or {@code BuffetLock}.</p>
  *
  */
-public class TestDriver {
+public final class TestDriver {
 
     /**
-     * Short delay used to give threads time to reach a blocked state.
+     * Short delay to give threads time to reach a blocked state.
      */
     private static final long SHORT_MS = 250;
 
@@ -64,16 +64,13 @@ public class TestDriver {
 
         log("=== TestDriver starting ===");
 
-        try{
-            testCloseUnblocks(maxSlices);
-        } finally {
-            // Always close at the end, even if a test throws.
-            buffet.close();
-        }
-
-        // Run additional tests on fresh instances so tests don't interfere
+        // Each test gets a fresh instance to avoid cross-test interference
+        testCloseUnblocks(maxSlices);
         testTakeAnyBlocksUntilAll(createBuffet(maxSlices));
         testVegPriorityBlocksTakeAny(createBuffet(maxSlices));
+
+        // Test 4 needs a small capacity to reliably fill and block
+        testAddPizzaBlocksWhenFullAndCloseReturnsFalse(createBuffet(3));
 
         log("=== ALL TESTS PASSED ===");
     }
@@ -99,8 +96,11 @@ public class TestDriver {
      *     <li>{@link Buffet#AddPizza(int, SliceType)} returns false</li>
      * </ul>
      *
-     * <p>This test puts three threads into blocked states, calls close(), and
-     * verifies that each thread returns and terminates.</p>
+     * <p>Runs in two independent parts (fresh buffets) to avoid interference:</p>
+     * <ul>
+     *     <li>Part A blocks {@code TakeAny}/{@code TakeVeg} on an empty buffet</li>
+     *     <li>Part B blocks {@code AddPizza} on a full buffet</li>
+     * </ul>
      *
      * @param maxSlices capacity used by this buffet instance (keeps test readable)
      */
@@ -191,7 +191,7 @@ public class TestDriver {
      * @param buffet buffet implementation under test
      */
     private static void testTakeAnyBlocksUntilAll(final Buffet buffet) {
-        log("[Test 2] takeAny blocks until it can return ALL desired slices");
+        log("[Test 2] TakeAny blocks until it can return ALL desired slices");
 
         require(buffet.AddPizza(1, SliceType.Meat), "Test 2: AddPizza failed unexpectedly" );
 
@@ -287,6 +287,40 @@ public class TestDriver {
         log("[Test 3] Passed.");
     }
 
+    /**
+     * Test 4: AddPizza behavior.
+     */
+    private static void testAddPizzaBlocksWhenFullAndCloseReturnsFalse(final Buffet buffet) {
+        log("[Test 4] AddPizza blocks when full; close() forces false");
+
+        final AtomicReference<Boolean> addResult = new AtomicReference<>();
+        final CountDownLatch started = new CountDownLatch(1);
+
+        final Thread server = new Thread(() -> {
+            started.countDown();
+            addResult.set(buffet.AddPizza(10, SliceType.Meat));
+        }, "server-add-10");
+
+        server.start();
+        awaitOrFail(started, 1000, "Test4: server did not start");
+
+        sleepMs(SHORT_MS);
+        require(server.isAlive(), "Test4: server should still be running (blocked after filling capacity)");
+
+        // Consume exactly capacity to create room
+        final List<SliceType> got = buffet.TakeAny(3);
+        require(got != null && got.size() == 3, "Test 4: expected TakeAny(3) to succeed");
+
+        // Close; server must return false
+        buffet.close();
+        joinOrFail(server, LONG_MS);
+
+        Boolean ok = addResult.get();
+        require(ok != null && !ok, "Test4: expected AddPizza to return false after close(), got " + ok);
+
+        log("[Test 4] Passed.");
+    }
+
     // Helper Methods
 
     /**
@@ -337,7 +371,7 @@ public class TestDriver {
      *
      * @param latch latch to await
      * @param timeoutMs timeout in milliseconds
-     * @param msg error messsage on timeout
+     * @param msg error message on timeout
      */
     private static void awaitOrFail(final CountDownLatch latch, final long timeoutMs, final String msg) {
         try {
