@@ -15,30 +15,65 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Test driver for buffet controller implementations.
+ * Test driver for {@link Buffet} controller implementations.
  *
- * <p>This driver runs a set of concurrency tests that validate:</p>
+ * <p>This driver validates core specification requirements:</p>
  * <ul>
- *     <li>Blocking behavior of TakeAny / TakeVeg</li>
- *     <li>Vegetarian priority rules</li>
- *     <li>close() unblocking and return semantics</li>
+ *     <li>{@link Buffet#TakeAny(int)} / {@link Buffet#TakeVeg(int)} block until they can return all desired slices</li>
+ *     <li>Vegetarian priority: {@link Buffet#TakeAny(int)} does not take veg slices while a veg patron is waiting</li>
+ *     <li>FIFO: returned slices are oldest-first</li>
+ *     <li>{@link Buffet#AddPizza(int, SliceType)} makes partial progress and blocks when full</li>
+ *     <li>{@link Buffet#close()} unblocks waiting calls and forces null/false return values</li>
  * </ul>
  *
- * <p>To test a different implementation, change exactly one line in {@link #createBuffet(int)}
- * to select {@code BuffetMonitor}, {@code BuffetSemaphore}, or {@code BuffetLock}.</p>
+ * <p>To test a different implementation, change exactly one line in {@link #main(String[])}
+ * (the assignment to {@code selected}) to select {@code BuffetMonitor}, {@code BuffetSemaphore},
+ * or {@code BuffetLock}. Each test uses {@link #createBuffet(int)} to create fresh instances of
+ * the selected implementation.</p>
  *
+ * <p>Error handling requirements: on failure, print details to stderr and exit with a non-zero code.</p>
  */
 public final class TestDriver {
 
     /**
-     * Short delay to give threads time to reach a blocked state.
+     * Delay to allow threads to reach a blocked state.
      */
-    private static final long SHORT_MS = 250;
+    private static final long SHORT_MS = 300;
 
     /**
      * Maximum time to wait for a thread to terminate before failing the test.
      */
     private static final long LONG_MS = 2000;
+
+    /**
+     * Timeout for "thread started" latches.
+     */
+    private static final long START_LATCH_MS = 1000;
+
+    /**
+     * Exit code: all tests passed.
+     */
+    private static final int EXIT_OK = 0;
+
+    /**
+     * Exit code: a test assertion failed.
+     */
+    private static final int EXIT_TEST_FAILED = 2;
+
+    /**
+     * Exit code: a thread failed to terminate.
+     */
+    private static final int EXIT_TIMEOUT = 3;
+
+    /**
+     * Exit code: unexpected runtime failure in the driver itself.
+     */
+    private static final int EXIT_DRIVER_ERROR = 4;
+
+    /**
+     * Buffet implementation chosen in {@link #main(String[])}.
+     */
+    private static Buffet selected;
 
     /**
      * Prevents instantiation of this utility class.
@@ -50,62 +85,85 @@ public final class TestDriver {
     /**
      * Entry point for the buffet controller tests.
      *
-     * <p>The first executable line must assign a {@link Buffet} reference
-     * to exactly one implementation (monitor, semaphore, or lock). This
-     * allows the same test harness to be reused across all solutions.</p>
+     * <p>The implementation is selected by a single assignment in {@code main}
+     * to (monitor, semaphore, or lock). This allows the same test harness to
+     * be reused across all solutions.</p>
      *
      * @param args command-line arguments (not used)
      */
     public static void main(final String[] args) {
+
         final int maxSlices = 20;
 
-        // REQUIRED: choose implementation by changing ONE line in createBuffet()
-        final Buffet buffet = createBuffet(maxSlices);
+        // REQUIRED: single line to choose implementation:
+        selected = new BuffetMonitor(maxSlices);
+        // selected = new BuffetSemaphore(maxSlices);
+        // selected = new BuffetLock(maxSlices);
 
         log("=== TestDriver starting ===");
 
-        // Each test gets a fresh instance to avoid cross-test interference
-        testCloseUnblocks(maxSlices);
-        testTakeAnyBlocksUntilAll(createBuffet(maxSlices));
-        testVegPriorityBlocksTakeAny(createBuffet(maxSlices));
+        try {
+            // Each test creates fresh Buffet instances via createBuffet() to avoid cross-test interference
+            testCloseUnblocksTakers(maxSlices);
+            testCloseUnblocksAddPizza(maxSlices);
+            testTakeAnyBlocksUntilAll(maxSlices);
+            testVegPriorityBlocksTakeAny(maxSlices);
+            testFifoOldestFirst(maxSlices);
 
-        // Test 4 needs a small capacity to reliably fill and block
-        testAddPizzaBlocksWhenFullAndCloseReturnsFalse(createBuffet(3));
+            // Test 5 needs a small capacity to reliably fill and block
+            testAddPizzaBlocksWhenFullAndCloseReturnsFalse(3);
 
-        log("=== ALL TESTS PASSED ===");
+            log("=== ALL TESTS PASSED ===");
+            System.exit(EXIT_OK);
+        } catch (final TestTimeoutException e) {
+            error("TIMEOUT: " + e.getMessage(), e);
+            System.exit(EXIT_TIMEOUT);
+        } catch (final IllegalStateException e) {
+            // Any require() failure is treated as a test failure
+            error("TEST FAILED: " + e.getMessage(), e);
+            System.exit(EXIT_TEST_FAILED);
+        } catch (final RuntimeException e) {
+            error("DRIVER ERROR: " + e.getMessage(), e);
+            System.exit(EXIT_DRIVER_ERROR);
+        }
+
     }
 
     /**
-     * Creates a fresh buffet instance so tests don't interfere with each other.
+     * Creates a new buffet instance of the same implementation type selected in {@link #main(String[])}.
      *
-     * @param maxSlices buffet capacity
-     * @return a new buffet implementation instance
+     * <p>This prevents cross-test interference while keeping the selected implementation consistent
+     * across all tests.</p>
+     *
+     * @param maxSlices maximum number of slices allowed on the buffet
+     * @return a new {@link Buffet} implementation instance of the selected type
+     * @throws IllegalStateException if the selected implementation type is unknown
      */
     private static Buffet createBuffet(final int maxSlices) {
-        // REQUIRED: single line to choose implementation:
-        return new BuffetMonitor(maxSlices);
-        // return new BuffetSemaphore(maxSlices);
-        // return new BuffetLock(maxSlices);
+        if (selected instanceof BuffetMonitor) {
+            return new BuffetMonitor(maxSlices);
+        }
+        if (selected instanceof BuffetSemaphore) {
+            return new BuffetSemaphore(maxSlices);
+        }
+        if (selected instanceof BuffetLock) {
+            return new BuffetLock(maxSlices);
+        }
+        throw new IllegalStateException("Unknown Buffet implementation: " + selected);
     }
 
     /**
-     * Test 1: {@link Buffet#close()} must unblock waiting calls and force return values:
+     * Test 1A: {@link Buffet#close()} must unblock threads blocked in {@link Buffet#TakeAny(int)}
+     * and {@link Buffet#TakeVeg(int)} and force them to return null.
      * <ul>
      *     <li>{@link Buffet#TakeAny(int)} returns null</li>
      *     <li>{@link Buffet#TakeVeg(int)} returns null</li>
-     *     <li>{@link Buffet#AddPizza(int, SliceType)} returns false</li>
      * </ul>
      *
-     * <p>Runs in two independent parts (fresh buffets) to avoid interference:</p>
-     * <ul>
-     *     <li>Part A blocks {@code TakeAny}/{@code TakeVeg} on an empty buffet</li>
-     *     <li>Part B blocks {@code AddPizza} on a full buffet</li>
-     * </ul>
-     *
-     * @param maxSlices capacity used by this buffet instance (keeps test readable)
+     * @param maxSlices buffet capacity for this test
      */
-    private static void testCloseUnblocks(final int maxSlices) {
-        log("[Test 1] close() unblocks TakeAny/TakeVeg/AddPizza");
+    private static void testCloseUnblocksTakers(final int maxSlices) {
+        log("[Test 1A] close() unblocks TakeAny/TakeVeg and returns null");
 
         // Part A: TakeAny/TakeVeg must unblock on close
         final Buffet takeBuffet = createBuffet(maxSlices);
@@ -131,7 +189,7 @@ public final class TestDriver {
         any.start();
         veg.start();
 
-        awaitOrFail(takeStarted, 1000, "Test 1A: taker threads did not start");
+        awaitOrFail(takeStarted, START_LATCH_MS, "Test 1A: taker threads did not start");
 
         // Give them time to enter the wait() loop
         sleepMs(SHORT_MS);
@@ -146,52 +204,63 @@ public final class TestDriver {
         require(anyResult.get() == null, "Test 1A: TakeAny should return null after close()");
         require(vegResult.get() == null, "Test 1A: TakeVeg should return null after close()");
 
-        // Part B: AddPizza must unblock on close
+        log("[Test 1A] Passed.");
+    }
+
+    /**
+     * Test 1B: {@link Buffet#close()} must unblock {@link Buffet#AddPizza(int, SliceType)}
+     * when the buffet is full and force it to return false.
+     *
+     * <p>Per spec, AddPizza adds as many as it can and then blocks when full. When closed,
+     * AddPizza returns false immediately.</p>
+     *
+     * @param maxSlices buffet capacity for this test
+     */
+    private static void testCloseUnblocksAddPizza(final int maxSlices) {
+        log("[Test 1B] close() unblocks AddPizza and returns false");
+
         final Buffet addBuffet = createBuffet(maxSlices);
 
         // Fill buffet to capacity and attempt to add more while full
         require(addBuffet.AddPizza(maxSlices, SliceType.Cheese), "Test 1B: failed to prefill buffet");
 
         final AtomicReference<Boolean> addResult = new AtomicReference<>();
-
         final CountDownLatch addStarted = new CountDownLatch(1);
 
-        final Thread add = new Thread(() -> {
+        final Thread server = new Thread(() -> {
             addStarted.countDown();
-            // Large add will fill the buffer then block trying to add more
-            addResult.set(addBuffet.AddPizza(100, SliceType.Cheese));
+            // Buffer is full; must block until close()
+            addResult.set(addBuffet.AddPizza(1, SliceType.Meat));
         }, "addPizza-blocker");
 
-        add.start();
-        awaitOrFail(addStarted, 1000, "Test 1B: add thread did not start");
+        server.start();
+        awaitOrFail(addStarted, START_LATCH_MS, "Test 1B: add thread did not start");
 
         // Give threads time to block
         sleepMs(SHORT_MS);
-        require(add.isAlive(), "Test 1B: addPizza thread should be blocked");
+        require(server.isAlive(), "Test 1B: addPizza thread should be blocked");
 
         addBuffet.close();
 
-        joinOrFail(add, LONG_MS);
-        require(addResult.get() != null && !addResult.get(),
+        joinOrFail(server, LONG_MS);
+        require(Boolean.FALSE.equals(addResult.get()),
                 "Test 1B: AddPizza should return false after close()");
 
-        log("[Test 1] Passed.");
+        log("[Test 1B] Passed.");
     }
 
     /**
-     * Test 2: TakeAny must block until it can return ALL desired slices.
+     * Test 2: {@link Buffet#TakeAny(int)} blocks until it can return ALL desired slices
+     * (does not take partial results).
      *
-     * <p>Setup:</p>
-     * <ul>
-     *     <li>Add 1 slice</li>
-     *     <li>Start TakeAny(2) -> must block</li>
-     *     <li>Add 1 more slice -> TakeAny returns 2</li>
-     * </ul>
+     * <p>Validates FIFO order for the returned list.</p>
      *
-     * @param buffet buffet implementation under test
+     * @param maxSlices buffet capacity for this test
      */
-    private static void testTakeAnyBlocksUntilAll(final Buffet buffet) {
+    private static void testTakeAnyBlocksUntilAll(final int maxSlices) {
         log("[Test 2] TakeAny blocks until it can return ALL desired slices");
+
+        final Buffet buffet = createBuffet(maxSlices);
 
         require(buffet.AddPizza(1, SliceType.Meat), "Test 2: AddPizza failed unexpectedly" );
 
@@ -204,18 +273,21 @@ public final class TestDriver {
         }, "takeAny-wants-2");
 
         t.start();
-        awaitOrFail(started, 1000, "Test2: threads did not start");
+        awaitOrFail(started, START_LATCH_MS, "Test2: threads did not start");
 
         sleepMs(SHORT_MS);
         require(t.isAlive(), "Test2: TakeAny(2) should be blocked but thread ended early");
 
-        require(buffet.AddPizza(1, SliceType.Meat), "Test 2: AddPizza failed unexpectedly");
+        require(buffet.AddPizza(1, SliceType.Veggie), "Test 2: AddPizza failed unexpectedly");
 
         joinOrFail(t, LONG_MS);
 
         final List<SliceType> got = result.get();
         require(got != null, "Test2: expected non-null result");
-        require(got.size() == 2, "Test2: expected 2 slices, but got " + got.size());
+        require(got.size() == 2, "Test2: expected 2 slices, got " + got.size());
+
+        require(got.get(0) == SliceType.Meat, "Test2: expected first slice Meat, got " +  got.get(0));
+        require(got.get(1) == SliceType.Veggie, "Test 2: expected second slice Veggie, got " + got.get(1));
 
         buffet.close();
         log("[Test 2] Passed.");
@@ -224,20 +296,15 @@ public final class TestDriver {
     /**
      * Test 3: Vegetarian priority.
      *
-     * <p>If a vegetarian is waiting in TakeVeg(), then TakeAny must NOT remove
-     * vegetarian slices (Cheese/Veggie). To test this:</p>
-     * <ol>
-     *     <li>Add 1 veg slice</li>
-     *     <li>Start TakeVeg(2) -> blocks (veg waiter now exists)</li>
-     *     <li>Start TakeAny(1) -> must block because only veg slices exist</li>
-     *     <li>Add 1 meat slice -> TakeAny should return Meat</li>
-     *     <li>Add 1 veg slice -> TakeVeg returns 2 veg slices</li>
-     * </ol>
+     * <p>If a vegetarian patron is waiting in {@link Buffet#TakeVeg(int)}, then
+     * {@link Buffet#TakeAny(int)} must not take vegetarian slices (Cheese/Veggie).</p>
      *
-     * @param buffet buffet implementation under test
+     * @param maxSlices buffet capacity for this test
      */
-    private static void testVegPriorityBlocksTakeAny(final Buffet buffet) {
+    private static void testVegPriorityBlocksTakeAny(final int maxSlices) {
         log("[Test 3] Veg priority: TakeAny must not take veg while veg patron is waiting");
+
+        final Buffet buffet = createBuffet(maxSlices);
 
         require(buffet.AddPizza(1, SliceType.Cheese), "Test 3: AddPizza failed unexpectedly");
 
@@ -250,7 +317,8 @@ public final class TestDriver {
             vegResult.set(buffet.TakeVeg(2));
         }, "veg-wants-2");
         veg.start();
-        awaitOrFail(vegStarted, 1000, "Test3: veg thread did not start");
+
+        awaitOrFail(vegStarted, START_LATCH_MS, "Test3: veg thread did not start");
 
         sleepMs(SHORT_MS);
         require(veg.isAlive(), "Test3: veg thread should be blocked");
@@ -261,7 +329,8 @@ public final class TestDriver {
             anyResult.set(buffet.TakeAny(1));
         }, "any-wants-1");
         any.start();
-        awaitOrFail(anyStarted, 1000, "Test3: any thread did not start");
+
+        awaitOrFail(anyStarted, START_LATCH_MS, "Test3: any thread did not start");
 
         sleepMs(SHORT_MS);
         require(any.isAlive(), "Test3: TakeAny(1) should block because only veg exists and veg is waiting");
@@ -269,6 +338,7 @@ public final class TestDriver {
         require(buffet.AddPizza(1, SliceType.Meat), "Test3: AddPizza failed unexpectedly");
 
         joinOrFail(any, LONG_MS);
+
         final List<SliceType> gotAny = anyResult.get();
         require(gotAny != null && gotAny.size() ==1, "Test3: TakeAny should return exactly one slice");
         require(!gotAny.get(0).isVeg(), "Test3: TakeAny returned a veg slice while veg was waiting: " + gotAny.get(0));
@@ -277,6 +347,7 @@ public final class TestDriver {
 
         // Add a vegetarian slice to satisfy TakeVeg(2)
         require(buffet.AddPizza(1, SliceType.Veggie), "Test3: AddPizza failed unexpectedly");
+
         joinOrFail(veg, LONG_MS);
 
         final List<SliceType> gotVeg = vegResult.get();
@@ -288,10 +359,47 @@ public final class TestDriver {
     }
 
     /**
-     * Test 4: AddPizza behavior.
+     * Test 4: FIFO ordering for {@link Buffet#TakeAny(int)}.
+     *
+     * @param maxSlices buffet capacity for this test
      */
-    private static void testAddPizzaBlocksWhenFullAndCloseReturnsFalse(final Buffet buffet) {
-        log("[Test 4] AddPizza blocks when full; close() forces false");
+    private static void testFifoOldestFirst(final int maxSlices) {
+        log("[Test 4] FIFO: TakeAny returns slices oldest-first");
+
+        final Buffet buffet = createBuffet(maxSlices);
+
+        require(buffet.AddPizza(1, SliceType.Meat), "Test 4: AddPizza Meat failed");
+        require(buffet.AddPizza(1, SliceType.Cheese), "Test 4: AddPizza Cheese failed");
+        require(buffet.AddPizza(1, SliceType.Veggie), "Test 4: AddPizza Veggie failed");
+
+        final List<SliceType> got = buffet.TakeAny(3);
+        require(got != null && got.size() == 3, "Test 4: expected TakeAny(3) to return 3 slices");
+
+        require(got.get(0) == SliceType.Meat, "Test 4: expected [0]=Meat, got " + got.get(0));
+        require(got.get(1) == SliceType.Cheese, "Test 4: expected [1]=Cheese, got " + got.get(1));
+        require(got.get(2) == SliceType.Veggie, "Test 4: expected [2]=Veggie, got " + got.get(2));
+
+        buffet.close();
+        log("[Test 4] Passed.");
+    }
+
+    /**
+     * Test 5: AddPizza partial-progress semantics, blocking when full, and close forces false.
+     *
+     * <p>AddPizza adds as many slices as it can and then blocks when the buffet is full. This test validates:</p>
+     *
+     * <ul>
+     *     <li>The server fills the buffet</li>
+     *     <li>The server remains blocked attempting to add remaining slices</li>
+     *     <li>{@link Buffet#close()} forces AddPizza to return false</li>
+     * </ul>
+     *
+     * @param capacity small capacity to make the test deterministic
+     */
+    private static void testAddPizzaBlocksWhenFullAndCloseReturnsFalse(final int capacity) {
+        log("[Test 5] AddPizza partial progress then blocks; close() forces false");
+
+        final Buffet buffet = createBuffet(capacity);
 
         final AtomicReference<Boolean> addResult = new AtomicReference<>();
         final CountDownLatch started = new CountDownLatch(1);
@@ -302,39 +410,55 @@ public final class TestDriver {
         }, "server-add-10");
 
         server.start();
-        awaitOrFail(started, 1000, "Test4: server did not start");
+        awaitOrFail(started, START_LATCH_MS, "Test 5: server thread did not start");
 
+        // Blocks until at least 'capacity' slices exist; observe partial progress externally
+        final List<SliceType> got = buffet.TakeAny(capacity);
+        require(got != null && got.size() == capacity, "Test 5: expected " + capacity + ", got " + got);
+
+        for (int i = 0; i < got.size(); i++) {
+            require(got.get(i) == SliceType.Meat, "Test 5: expected Meat at index " + i + ", got " + got.get(i));
+        }
+
+        // With no further patrons, server cannot complete AddPizza(10)
         sleepMs(SHORT_MS);
-        require(server.isAlive(), "Test4: server should still be running (blocked after filling capacity)");
-
-        // Consume exactly capacity to create room
-        final List<SliceType> got = buffet.TakeAny(3);
-        require(got != null && got.size() == 3, "Test 4: expected TakeAny(3) to succeed");
+        require(server.isAlive(), "Test 5: server should still be running (blocked after filling capacity)");
 
         // Close; server must return false
         buffet.close();
         joinOrFail(server, LONG_MS);
 
-        Boolean ok = addResult.get();
-        require(ok != null && !ok, "Test4: expected AddPizza to return false after close(), got " + ok);
+        require(Boolean.FALSE.equals(addResult.get()), "Test 5: expected AddPizza to return false after close()");
 
-        log("[Test 4] Passed.");
+        log("[Test 5] Passed.");
     }
 
     // Helper Methods
 
     /**
-     * Logs a message with a timestamp.
+     * Logs a message with a timestamp to stdout.
      *
      * @param msg message to log
      */
     private static void log(final String msg) {
-
         System.out.println(LocalTime.now() + " " + msg);
     }
 
     /**
-     * Sleeps for the approximately {@code ms} milliseconds, handling interrupts internally.
+     * Logs an error message to stderr.
+     *
+     * @param msg error message
+     * @param t throwable cause
+     */
+    private static void error(final String msg, final Throwable t) {
+        System.err.println(LocalTime.now() + " " + msg);
+        if (t != null) {
+            t.printStackTrace(System.err);
+        }
+    }
+
+    /**
+     * Sleeps approximately {@code ms} milliseconds, handling interrupts internally.
      *
      * @param ms milliseconds to sleep
      */
@@ -359,10 +483,10 @@ public final class TestDriver {
         try {
             t.join(timeoutMs);
         } catch (final InterruptedException ignored) {
-            // Per assignment: handle interrupts internally (driver can still fail if thread is alive)
+            // Per assignment: handle interrupts internally
         }
         if (t.isAlive()) {
-            throw new IllegalStateException("Thread did not terminate: " + t.getName());
+            throw new TestTimeoutException("Thread did not terminate: " + t.getName());
         }
     }
 
@@ -376,10 +500,10 @@ public final class TestDriver {
     private static void awaitOrFail(final CountDownLatch latch, final long timeoutMs, final String msg) {
         try {
             if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
-                throw new IllegalStateException(msg);
+                throw new TestTimeoutException(msg);
             }
         } catch (final InterruptedException ignored) {
-            throw new IllegalStateException(msg + " (interrupted)");
+            throw new TestTimeoutException(msg + " (interrupted)");
         }
     }
 
@@ -392,6 +516,21 @@ public final class TestDriver {
     private static void require(final boolean condition, final String msgIfFalse) {
         if (!condition) {
             throw new IllegalStateException(msgIfFalse);
+        }
+    }
+
+    /**
+     * Exception type used to distinguish timeouts/deadlocks from ordinary test failures.
+     */
+    private static final class TestTimeoutException extends RuntimeException {
+
+        /**
+         * Constructs a timeout exception with a message.
+         *
+         * @param msg timeout message
+         */
+        TestTimeoutException(final String msg) {
+            super(msg);
         }
     }
 }
