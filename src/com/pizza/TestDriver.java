@@ -17,12 +17,15 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Test driver for buffet controller implementations.
  *
- * <p>This driver uses a set of concurrency tests to validate the required
- * blocking and shutdown semantics of the buffet controller.</p>
+ * <p>This driver runs a set of concurrency tests that validate:</p>
+ * <ul>
+ *     <li>Blocking behavior of TakeAny / TakeVeg</li>
+ *     <li>Vegetarian priority rules</li>
+ *     <li>close() unblocking and return semantics</li>
+ * </ul>
  *
- * <p>The specific implementation under test should be selected
- * by changing exactly one line in {@code main} to select {@code BuffetMonitor},
- * {@code BuffetSemaphore}, or {@code BuffetLock}.</p>
+ * <p>To test a different implementation, change exactly one line in {@code main}
+ * to select {@code BuffetMonitor}, {@code BuffetSemaphore}, or {@code BuffetLock}.</p>
  *
  */
 public class TestDriver {
@@ -54,47 +57,50 @@ public class TestDriver {
      * @param args command-line arguments (not used)
      */
     public static void main(final String[] args) {
-        // REQUIRED: single line to choose implementation:
-        final Buffet buffet = new BuffetMonitor(20);
-        // final Buffet buffet = new BuffetSemaphore(20);
-        // final Buffet buffet = new BuffetLock(20);
+        final int maxSlices = 20;
+
+        // REQUIRED: choose implementation by changing ONE line in createBuffet()
+        final Buffet buffet = createBuffet(maxSlices);
 
         log("=== TestDriver starting ===");
 
         try{
-            testCloseUnblocks(buffet, 20);
+            testCloseUnblocks(buffet, maxSlices);
         } finally {
             // Always close at the end, even if a test throws.
             buffet.close();
         }
 
-        // Later: Run additional tests on fresh buffet instances so tests don't interfere
+        // Run additional tests on fresh instances so tests don't interfere
+        testTakeAnyBlocksUntilAll(createBuffet(maxSlices));
+        testVegPriorityBlocksTakeAny(createBuffet(maxSlices));
 
         log("=== ALL TESTS PASSED ===");
     }
 
     /**
-     * Factory for creating a fresh buffet instance for tests that must not share state.
+     * Creates a fresh buffet instance so tests don't interfere with each other.
      *
      * @param maxSlices buffet capacity
      * @return a new buffet implementation instance
      */
     private static Buffet createBuffet(final int maxSlices) {
+        // REQUIRED: single line to choose implementation:
         return new BuffetMonitor(maxSlices);
         // return new BuffetSemaphore(maxSlices);
         // return new BuffetLock(maxSlices);
     }
 
     /**
-     * Test 1: {@link Buffet#close()} must unblock threads and force return values:
+     * Test 1: {@link Buffet#close()} must unblock waiting calls and force return values:
      * <ul>
      *     <li>{@link Buffet#TakeAny(int)} returns null</li>
      *     <li>{@link Buffet#TakeVeg(int)} returns null</li>
      *     <li>{@link Buffet#AddPizza(int, SliceType)} returns false</li>
      * </ul>
      *
-     * <p>This test puts threads into blocked states, calls close(), and
-     * verifies they terminate with the correct return values.</p>
+     * <p>This test puts three threads into blocked states, calls close(), and
+     * verifies that each thread returns and terminates.</p>
      *
      * @param buffet buffet implementation under test
      * @param maxSlices capacity used by this buffet instance (keeps test readable)
@@ -106,21 +112,25 @@ public class TestDriver {
         final AtomicReference<List<SliceType>> vegResult = new AtomicReference<>();
         final AtomicReference<Boolean> addResult = new AtomicReference<>();
 
+        // Ensures all threads have started before proceeding
         final CountDownLatch started = new CountDownLatch(3);
 
-        Thread any = new Thread(() -> {
+        final Thread any = new Thread(() -> {
             started.countDown();
-            anyResult.set(buffet.TakeAny(6));   // empty, blocks until close
+            // Buffet starts empty; requesting maxSlices guarantees this blocks
+            anyResult.set(buffet.TakeAny(maxSlices));
         }, "takeAny-blocker");
 
-        Thread veg = new Thread(() -> {
+        final Thread veg = new Thread(() -> {
             started.countDown();
-            vegResult.set(buffet.TakeVeg(1));   // empty, blocks until close
+            // Buffet starts empty; any positive desired blocks until close()
+            vegResult.set(buffet.TakeVeg(1));
         }, "takeVeg-blocker");
 
-        Thread add = new Thread(() -> {
+        final Thread add = new Thread(() -> {
             started.countDown();
-            addResult.set(buffet.AddPizza(100, SliceType.Cheese));  // fills then blocks until close
+            // Large add will fill the buffer then block trying to add more
+            addResult.set(buffet.AddPizza(100, SliceType.Cheese));
         }, "addPizza-blocker");
 
         any.start();
@@ -144,6 +154,115 @@ public class TestDriver {
                 "Test1: AddPizza should return false after close()");
 
         log("[Test 1] Passed.");
+    }
+
+    /**
+     * Test 2: TakeAny must block until it can return ALL desired slices.
+     *
+     * <p>Setup:</p>
+     * <ul>
+     *     <li>Add 1 slice</li>
+     *     <li>Start TakeAny(2) -> must block</li>
+     *     <li>Add 1 more slice -> TakeAny returns 2</li>
+     * </ul>
+     *
+     * @param buffet buffet implementation under test
+     */
+    private static void testTakeAnyBlocksUntilAll(final Buffet buffet) {
+        log("[Test 2] takeAny blocks until it can return ALL desired slices");
+
+        require(buffet.AddPizza(1, SliceType.Meat), "Test 2: AddPizza failed unexpectedly" );
+
+        final AtomicReference<List<SliceType>> result = new AtomicReference<>();
+        final CountDownLatch started = new CountDownLatch(1);
+
+        final Thread t = new Thread(() -> {
+            started.countDown();
+            result.set(buffet.TakeAny(2));
+        }, "takeAny-wants-2");
+
+        t.start();
+        awaitOrFail(started, 1000, "Test2: threads did not start");
+
+        sleepMs(SHORT_MS);
+        require(t.isAlive(), "Test2: TakeAny(2) should be blocked but thread ended early");
+
+        require(buffet.AddPizza(1, SliceType.Meat), "Test 2: AddPizza failed unexpectedly");
+
+        joinOrFail(t, LONG_MS);
+
+        final List<SliceType> got = result.get();
+        require(got != null, "Test2: expected non-null result");
+        require(got.size() == 2, "Test2: expected 2 slices, but got " + got.size());
+
+        buffet.close();
+        log("[Test 2] Passed.");
+    }
+
+    /**
+     * Test 3: Vegetarian priority.
+     *
+     * <p>If a vegetarian is waiting in TakeVeg(), then TakeAny must NOT remove
+     * vegetarian slices (Cheese/Veggie). To test this:</p>
+     * <ol>
+     *     <li>Add 1 veg slice</li>
+     *     <li>Start TakeVeg(2) -> blocks (veg waiter now exists)</li>
+     *     <li>Start TakeAny(1) -> must block because only veg slices exist</li>
+     *     <li>Add 1 meat slice -> TakeAny should return Meat</li>
+     *     <li>Add 1 veg slice -> TakeVeg returns 2 veg slices</li>
+     * </ol>
+     *
+     * @param buffet buffet implementation under test
+     */
+    private static void testVegPriorityBlocksTakeAny(final Buffet buffet) {
+        log("[Test 3] Veg priority: TakeAny must not take veg while veg patron is waiting");
+
+        require(buffet.AddPizza(1, SliceType.Cheese), "Test 3: AddPizza failed unexpectedly");
+
+        final AtomicReference<List<SliceType>> vegResult = new AtomicReference<>();
+        final AtomicReference<List<SliceType>> anyResult = new AtomicReference<>();
+
+        final CountDownLatch vegStarted = new CountDownLatch(1);
+        final Thread veg  = new Thread(() -> {
+            vegStarted.countDown();
+            vegResult.set(buffet.TakeVeg(2));
+        }, "veg-wants-2");
+        veg.start();
+        awaitOrFail(vegStarted, 1000, "Test3: veg thread did not start");
+
+        sleepMs(SHORT_MS);
+        require(veg.isAlive(), "Test3: veg thread should be blocked");
+
+        final CountDownLatch anyStarted = new CountDownLatch(1);
+        final Thread any = new Thread(() -> {
+            anyStarted.countDown();
+            anyResult.set(buffet.TakeAny(1));
+        }, "any-wants-1");
+        any.start();
+        awaitOrFail(anyStarted, 1000, "Test3: any thread did not start");
+
+        sleepMs(SHORT_MS);
+        require(any.isAlive(), "Test3: TakeAny(1) should block because only veg exists and veg is waiting");
+
+        require(buffet.AddPizza(1, SliceType.Meat), "Test3: AddPizza failed unexpectedly");
+
+        joinOrFail(any, LONG_MS);
+        final List<SliceType> gotAny = anyResult.get();
+        require(gotAny != null && gotAny.size() ==1, "Test3: TakeAny should return exactly one slice");
+        require(!gotAny.get(0).isVeg(), "Test3: TakeAny returned a veg slice while veg was waiting: " + gotAny.get(0));
+
+        require(veg.isAlive(), "Test3: veg should still be blocked (needs 2 veg slices)");
+
+        // Add a vegetarian slice to satisfy TakeVeg(2)
+        require(buffet.AddPizza(1, SliceType.Veggie), "Test3: AddPizza failed unexpectedly");
+        joinOrFail(veg, LONG_MS);
+
+        final List<SliceType> gotVeg = vegResult.get();
+        require(gotVeg != null && gotVeg.size() == 2, "Test3: TakeVeg should return 2 slices");
+        require(gotVeg.get(0).isVeg() && gotVeg.get(1).isVeg(), "Test3: TakeVeg returned non-veg slices: " + gotVeg);
+
+        buffet.close();
+        log("[Test 3] Passed.");
     }
 
     // Helper Methods
