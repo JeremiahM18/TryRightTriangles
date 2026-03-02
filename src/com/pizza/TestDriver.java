@@ -65,7 +65,7 @@ public class TestDriver {
         log("=== TestDriver starting ===");
 
         try{
-            testCloseUnblocks(buffet, maxSlices);
+            testCloseUnblocks(maxSlices);
         } finally {
             // Always close at the end, even if a test throws.
             buffet.close();
@@ -102,56 +102,78 @@ public class TestDriver {
      * <p>This test puts three threads into blocked states, calls close(), and
      * verifies that each thread returns and terminates.</p>
      *
-     * @param buffet buffet implementation under test
      * @param maxSlices capacity used by this buffet instance (keeps test readable)
      */
-    private static void testCloseUnblocks(final Buffet buffet, final int maxSlices) {
+    private static void testCloseUnblocks(final int maxSlices) {
         log("[Test 1] close() unblocks TakeAny/TakeVeg/AddPizza");
+
+        // Part A: TakeAny/TakeVeg must unblock on close
+        final Buffet takeBuffet = createBuffet(maxSlices);
 
         final AtomicReference<List<SliceType>> anyResult = new AtomicReference<>();
         final AtomicReference<List<SliceType>> vegResult = new AtomicReference<>();
-        final AtomicReference<Boolean> addResult = new AtomicReference<>();
 
         // Ensures all threads have started before proceeding
-        final CountDownLatch started = new CountDownLatch(3);
+        final CountDownLatch takeStarted = new CountDownLatch(2);
 
         final Thread any = new Thread(() -> {
-            started.countDown();
+            takeStarted.countDown();
             // Buffet starts empty; requesting maxSlices guarantees this blocks
-            anyResult.set(buffet.TakeAny(maxSlices));
+            anyResult.set(takeBuffet.TakeAny(maxSlices));
         }, "takeAny-blocker");
 
         final Thread veg = new Thread(() -> {
-            started.countDown();
+            takeStarted.countDown();
             // Buffet starts empty; any positive desired blocks until close()
-            vegResult.set(buffet.TakeVeg(1));
+            vegResult.set(takeBuffet.TakeVeg(1));
         }, "takeVeg-blocker");
-
-        final Thread add = new Thread(() -> {
-            started.countDown();
-            // Large add will fill the buffer then block trying to add more
-            addResult.set(buffet.AddPizza(100, SliceType.Cheese));
-        }, "addPizza-blocker");
 
         any.start();
         veg.start();
-        add.start();
 
-        awaitOrFail(started, 1000, "Test1: threads did not start");
+        awaitOrFail(takeStarted, 1000, "Test 1A: taker threads did not start");
 
-        // Give threads time to block
+        // Give them time to enter the wait() loop
         sleepMs(SHORT_MS);
+        require(any.isAlive(), "Test 1A: TakeAny thread should be blocked");
+        require(veg.isAlive(), "Test 1A: TakeVeg thread should be blocked");
 
-        buffet.close();
+        takeBuffet.close();
 
         joinOrFail(any, LONG_MS);
         joinOrFail(veg, LONG_MS);
-        joinOrFail(add, LONG_MS);
 
-        require(anyResult.get() == null, "Test1: TakeAny should return null after close()");
-        require(vegResult.get() == null, "Test1: TakeVeg should return null after close()");
+        require(anyResult.get() == null, "Test 1A: TakeAny should return null after close()");
+        require(vegResult.get() == null, "Test 1A: TakeVeg should return null after close()");
+
+        // Part B: AddPizza must unblock on close
+        final Buffet addBuffet = createBuffet(maxSlices);
+
+        // Fill buffet to capacity and attempt to add more while full
+        require(addBuffet.AddPizza(maxSlices, SliceType.Cheese), "Test 1B: failed to prefill buffet");
+
+        final AtomicReference<Boolean> addResult = new AtomicReference<>();
+
+        final CountDownLatch addStarted = new CountDownLatch(1);
+
+        final Thread add = new Thread(() -> {
+            addStarted.countDown();
+            // Large add will fill the buffer then block trying to add more
+            addResult.set(addBuffet.AddPizza(100, SliceType.Cheese));
+        }, "addPizza-blocker");
+
+        add.start();
+        awaitOrFail(addStarted, 1000, "Test 1B: add thread did not start");
+
+        // Give threads time to block
+        sleepMs(SHORT_MS);
+        require(add.isAlive(), "Test 1B: addPizza thread should be blocked");
+
+        addBuffet.close();
+
+        joinOrFail(add, LONG_MS);
         require(addResult.get() != null && !addResult.get(),
-                "Test1: AddPizza should return false after close()");
+                "Test 1B: AddPizza should return false after close()");
 
         log("[Test 1] Passed.");
     }
