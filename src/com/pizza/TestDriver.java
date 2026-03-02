@@ -10,20 +10,32 @@ package com.pizza;
 
 import java.time.LocalTime;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Stress test driver for the buffet  controller implementations.
+ * Test driver for buffet controller implementations.
  *
- * <p>This driver is intended to exercise the Buffet interface using
- * multiple threads that simulate servers (adding slices) and patrons
- * (taking slices). The specific implementation under test should be
- * selected by changing exactly one line in {@code main}.</p>
+ * <p>This driver uses a set of concurrency tests to validate the required
+ * blocking and shutdown semantics of the buffet controller.</p>
  *
- * <p>Test logic will be added in stages to validate blocking behavior,
- * ordering, capacity constraints, vegetarian priority, and close semantics.</p>
+ * <p>The specific implementation under test should be selected
+ * by changing exactly one line in {@code main} to select {@code BuffetMonitor},
+ * {@code BuffetSemaphore}, or {@code BuffetLock}.</p>
+ *
  */
 public class TestDriver {
+
+    /**
+     * Short delay used to give threads time to reach a blocked state.
+     */
+    private static final long SHORT_MS = 250;
+
+    /**
+     * Maximum time to wait for a thread to terminate before failing the test.
+     */
+    private static final long LONG_MS = 2000;
 
     /**
      * Prevents instantiation of this utility class.
@@ -33,7 +45,7 @@ public class TestDriver {
     }
 
     /**
-     * Entry point for the buffet stress test.
+     * Entry point for the buffet controller tests.
      *
      * <p>The first executable line must assign a {@link Buffet} reference
      * to exactly one implementation (monitor, semaphore, or lock). This
@@ -48,143 +60,93 @@ public class TestDriver {
         // final Buffet buffet = new BuffetLock(20);
 
         log("=== TestDriver starting ===");
+
         try{
-            runPhase1Sanity(buffet);
-            // run Phase2BlockingTests(buffet);
-            // run Phase3StressTest(buffet);
+            testCloseUnblocks(buffet, 20);
         } finally {
-            // Ensure close even if a phase throws.
+            // Always close at the end, even if a test throws.
             buffet.close();
         }
+
+        // Later: Run additional tests on fresh buffet instances so tests don't interfere
+
+        log("=== ALL TESTS PASSED ===");
     }
 
     /**
-     * Phase 1: Minimal sanity checks to confirm basic wiring.
+     * Factory for creating a fresh buffet instance for tests that must not share state.
      *
-     * <p>This phase avoid assumptions about full correctness. It
-     * verifies that the driver can start threads, call methods, and close
-     * cleanly.</p>
+     * @param maxSlices buffet capacity
+     * @return a new buffet implementation instance
+     */
+    private static Buffet createBuffet(final int maxSlices) {
+        return new BuffetMonitor(maxSlices);
+        // return new BuffetSemaphore(maxSlices);
+        // return new BuffetLock(maxSlices);
+    }
+
+    /**
+     * Test 1: {@link Buffet#close()} must unblock threads and force return values:
+     * <ul>
+     *     <li>{@link Buffet#TakeAny(int)} returns null</li>
+     *     <li>{@link Buffet#TakeVeg(int)} returns null</li>
+     *     <li>{@link Buffet#AddPizza(int, SliceType)} returns false</li>
+     * </ul>
+     *
+     * <p>This test puts threads into blocked states, calls close(), and
+     * verifies they terminate with the correct return values.</p>
      *
      * @param buffet buffet implementation under test
+     * @param maxSlices capacity used by this buffet instance (keeps test readable)
      */
-    private static void runPhase1Sanity(final Buffet buffet) {
-        log("[Phase 1] Sanity: force blocking, then close and ensure threads exit.");
+    private static void testCloseUnblocks(final Buffet buffet, final int maxSlices) {
+        log("[Test 1] close() unblocks TakeAny/TakeVeg/AddPizza");
 
-        final AtomicBoolean stop = new AtomicBoolean(false);
+        final AtomicReference<List<SliceType>> anyResult = new AtomicReference<>();
+        final AtomicReference<List<SliceType>> vegResult = new AtomicReference<>();
+        final AtomicReference<Boolean> addResult = new AtomicReference<>();
 
-        // Force a patron to block: buffet starts empty, desired=maxSlices(20)
-        final Thread patron = new Thread(
-                new AnyPatron(buffet, stop, 20),
-                "patron-any-1"
-        );
+        final CountDownLatch started = new CountDownLatch(3);
 
-        // Server adds in batches; fill the buffet and eventually blocks trying to add more
-        final Thread server = new Thread(
-                new Server(buffet, stop, 5, SliceType.Cheese),
-                "server-1"
-        );
+        Thread any = new Thread(() -> {
+            started.countDown();
+            anyResult.set(buffet.TakeAny(6));   // empty, blocks until close
+        }, "takeAny-blocker");
 
-        // Start patron first to ensure it's waiting
-        patron.start();
-        sleepMs(150);
-        server.start();
+        Thread veg = new Thread(() -> {
+            started.countDown();
+            vegResult.set(buffet.TakeVeg(1));   // empty, blocks until close
+        }, "takeVeg-blocker");
 
-        // Let them run long enough to reach a blocked state
-        sleepMs(800);
+        Thread add = new Thread(() -> {
+            started.countDown();
+            addResult.set(buffet.AddPizza(100, SliceType.Cheese));  // fills then blocks until close
+        }, "addPizza-blocker");
 
-        log("[Phase 1] Closing buffet (must unblock waiting threads).");
-        buffet.close();         // Per interface: unblocks TakeAny/AddPizza and causes null/false returns
-        stop.set(true);         // Stops loops for threads that are not blocked
+        any.start();
+        veg.start();
+        add.start();
 
-        joinOrFail(server, 2000);
-        joinOrFail(patron, 2000);
+        awaitOrFail(started, 1000, "Test1: threads did not start");
 
-        log("[Phase 1] Completed.");
+        // Give threads time to block
+        sleepMs(SHORT_MS);
+
+        buffet.close();
+
+        joinOrFail(any, LONG_MS);
+        joinOrFail(veg, LONG_MS);
+        joinOrFail(add, LONG_MS);
+
+        require(anyResult.get() == null, "Test1: TakeAny should return null after close()");
+        require(vegResult.get() == null, "Test1: TakeVeg should return null after close()");
+        require(addResult.get() != null && !addResult.get(),
+                "Test1: AddPizza should return false after close()");
+
+        log("[Test 1] Passed.");
     }
 
-    // Runnables
-
-    /**
-     * Server thread that repeatedly attempts to add pizza slices.
-     */
-    private static final class Server implements Runnable {
-
-        private final Buffet buffet;
-        private final AtomicBoolean stop;
-        private final int batchSize;
-        private final SliceType type;
-
-        /**
-         * Constructs a server worker.
-         *
-         * @param buffet buffet controller to add slices to
-         * @param stop stop flag used to end the thread
-         * @param batchSize number of slices to attempt per AddPizza call
-         * @param type slice type to add
-         */
-        private Server(final Buffet buffet,
-                       final AtomicBoolean stop,
-                       final int batchSize,
-                       final SliceType type) {
-            this.buffet = buffet;
-            this.stop = stop;
-            this.batchSize = batchSize;
-            this.type = type;
-        }
-
-        @Override
-        public void run() {
-            while (!stop.get()) {
-                final boolean ok = buffet.AddPizza(batchSize, type);
-                if (!ok) {
-                    log(Thread.currentThread().getName() + " AddPizza returned false (closed).");
-                    return;
-                }
-                sleepMs(50);
-            }
-            log(Thread.currentThread().getName() + " stopping normally.");
-        }
-    }
-
-    /**
-     * Non-vegetarian patron that repeatedly attempts to take any slices.
-     */
-    private static final class AnyPatron implements Runnable {
-
-        private final Buffet buffet;
-        private final AtomicBoolean stop;
-        private final int desired;
-
-        /**
-         * Constructs a non-vegetarian patron worker.
-         *
-         * @param buffet buffet controller to take slices from
-         * @param stop stop flag used to end the thread
-         * @param desired number of slices per TakeAny call
-         */
-        private AnyPatron(final Buffet buffet,
-                          final AtomicBoolean stop,
-                          final int desired) {
-            this.buffet = buffet;
-            this.stop = stop;
-            this.desired = desired;
-        }
-
-        @Override
-        public void run() {
-            while (!stop.get()) {
-                final List<SliceType> got = buffet.TakeAny(desired);
-                if (got == null) {
-                    log(Thread.currentThread().getName() + " TakeAny returned null (closed).");
-                    return;
-                }
-                sleepMs(50);
-            }
-            log(Thread.currentThread().getName() + " stopping normally.");
-        }
-    }
-
-    // Test utilities
+    // Helper Methods
 
     /**
      * Logs a message with a timestamp.
@@ -192,11 +154,12 @@ public class TestDriver {
      * @param msg message to log
      */
     private static void log(final String msg) {
+
         System.out.println(LocalTime.now() + " " + msg);
     }
 
     /**
-     * Sleeps for the requested duration, ignoring interrupts.
+     * Sleeps for the approximately {@code ms} milliseconds, handling interrupts internally.
      *
      * @param ms milliseconds to sleep
      */
@@ -212,7 +175,7 @@ public class TestDriver {
     }
 
     /**
-     * Joins a thread or fails fast if it does not terminate.
+     * Joins a thread with a timeout and fails if it does not terminate.
      *
      * @param t thread to join
      * @param timeoutMs join timeout in milliseconds
@@ -221,10 +184,39 @@ public class TestDriver {
         try {
             t.join(timeoutMs);
         } catch (final InterruptedException ignored) {
-            // Treat as not fatal for the driver; check liveness.
+            // Per assignment: handle interrupts internally (driver can still fail if thread is alive)
         }
         if (t.isAlive()) {
             throw new IllegalStateException("Thread did not terminate: " + t.getName());
+        }
+    }
+
+    /**
+     * Waits for a latch or throws if it does not reach zero within the timeout.
+     *
+     * @param latch latch to await
+     * @param timeoutMs timeout in milliseconds
+     * @param msg error messsage on timeout
+     */
+    private static void awaitOrFail(final CountDownLatch latch, final long timeoutMs, final String msg) {
+        try {
+            if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+                throw new IllegalStateException(msg);
+            }
+        } catch (final InterruptedException ignored) {
+            throw new IllegalStateException(msg + " (interrupted)");
+        }
+    }
+
+    /**
+     * Enforces a required condition for a test.
+     *
+     * @param condition condition that must be true
+     * @param msgIfFalse message for the thrown exception if the condition is false
+     */
+    private static void require(final boolean condition, final String msgIfFalse) {
+        if (!condition) {
+            throw new IllegalStateException(msgIfFalse);
         }
     }
 }

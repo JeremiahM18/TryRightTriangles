@@ -24,6 +24,7 @@ public enum SliceType {
    * @return Returns true if pizza slice is vegetarian; false otherwise
    */
   public boolean isVeg() {
+
     return this == Veggie || this == Cheese;
   }
 }
