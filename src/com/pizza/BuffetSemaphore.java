@@ -9,6 +9,7 @@
 package com.pizza;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.Semaphore;
@@ -16,16 +17,17 @@ import java.util.concurrent.Semaphore;
 /**
  * Semaphore-based implementation of Buffet interface.
  *
- * <p>This class coordinates server threads (adding slices) and patron
- * threads (taking slices) using Java semaphores. The buffet is modeled
- * as a FIFO queue where the oldest slice is removed first.</p>
+ * <p>This implementation uses semaphores only (single-permit acquire/release)
+ * to coordinate server threads (adding slices) and patron threads (taking slices).
+ * Shared state (queue, counters, and closed flag) is protected by {@link #mutex}.</p>
  *
- * <p>Semaphore usage constraints for this assignment:
- * only single-permit operations are allowed (acquire()/release()).
- * Multiple-permit and non-blocking acquisition calls are not used.</p>
+ * <p>Because semaphores do not provide condition variables, this class uses two
+ * condition queses using semaphores: one for {@code TakeAny} patrons
+ * ({@link #anyWake}/{@link #anyWaiters}) and one for {@code TakeVeg} patrons
+ * ({@link #vegWake}/{@link #vegWaiters}). Waiters block on their respective
+ * semaphore and are released when buffet state changes or the buffet closes.</p>
  *
- * <p>Concurrency logic is intentionally deferred for later development.</p>
- *
+ * <p>The buffet is modeled as a FIFO queue: the oldest slice is removed first.</p>
  */
 public class BuffetSemaphore implements Buffet {
 
@@ -50,11 +52,6 @@ public class BuffetSemaphore implements Buffet {
     private final Semaphore spaceAvailable;
 
     /**
-     * Counting semaphore tracking total slices currently available.
-     */
-    private final Semaphore sliceAvailable;
-
-    /**
      * True once the buffet has been closed.
      */
     private boolean closed;
@@ -63,6 +60,61 @@ public class BuffetSemaphore implements Buffet {
      * Number of vegetarian patrons currently waiting in TakeVeg().
      */
     private int waitingVeg;
+
+    /**
+     * Condition-style wakeup semaphore for patrons.
+     *
+     * <p>Patrons block on this when they cannot yet obtain all required slices.
+     * When buffet state changes (pizza added / slices removed / close), "broadcast"
+     * by releasing this semaphore once per blocked patron.</p>
+     */
+    private final Semaphore anyWake;
+
+    /**
+     * Condition-style wakeup semaphore for vegetarian patrons.
+     *
+     * <p>Vegetarian patrons block on this when there are not enough vegetarian
+     * slices to satisfy {@code TakeVeg(desired)}.</p>
+     */
+    private final Semaphore vegWake;
+
+    /**
+     * Number of patron threads currently blocked on {@link #anyWake}.
+     *
+     * <p>Protected by {@link #mutex}. Used to implement broadcast wakeups
+     * without non-blocking or multi-permit semaphore operations.</p>
+     */
+    private int anyWaiters;
+
+    /**
+     * Number of vegetarian patron threads currently blocked on {@link #vegWake}.
+     *
+     * <p>Protected by {@link #mutex}. Used to release waiting veg patrons on state
+     * changes or close.</p>
+     */
+    private int vegWaiters;
+
+    /**
+     * Number of server threads currently blocked waiting for free buffet slots.
+     *
+     * <p>Protected by {@link #mutex}. Used so {@link #close()} can release enough
+     * permits on {@link #spaceAvailable} to unblock servers and force false returns.</p>
+     */
+    private int addWaiters;
+
+    /**
+     * Cached count of vegetarian slices currently on the buffet.
+     *
+     * <p>Maintained under {@link #mutex} to allow O(1) availability checks.</p>
+     */
+    private int vegCount;
+
+    /**
+     * Cached count of non-vegetarian slices currently on the buffet.
+     *
+     * <p>Maintained under {@link #mutex} to allow O(1) availability checks.</p>
+     */
+    private int nonVegCount;
 
     /**
      * Constructs a buffet controller with fixed maximum capacity.
@@ -79,10 +131,20 @@ public class BuffetSemaphore implements Buffet {
 
         this.mutex = new Semaphore(1);
         this.spaceAvailable = new Semaphore(maxSlices);
-        this.sliceAvailable = new Semaphore(0);
 
         this.closed = false;
         this.waitingVeg = 0;
+
+        this.anyWake = new Semaphore(0);
+        this.vegWake = new Semaphore(0);
+
+        this.anyWaiters = 0;
+        this.vegWaiters = 0;
+
+        this.addWaiters = 0;
+
+        this.vegCount = 0;
+        this.nonVegCount = 0;
     }
 
     /**
@@ -101,11 +163,67 @@ public class BuffetSemaphore implements Buffet {
      */
     @Override
     public List<SliceType> TakeAny(final int desired){
-        // TODO: validate desired
-        // TODO: block until desired eligible slices are available or buffet is closed
-        // TODO: enforce vegetarian-priority rule using waitingVeg
-        // TODO: return slices in FIFO order
-        return null;
+        if (desired < 0 || desired > maxSlices) {
+            throw new IllegalArgumentException("desired must be between 0 and " + maxSlices + ".");
+        }
+        if (desired == 0) {
+            return List.of();
+        }
+
+        lock();
+        try {
+            if(closed){
+                signalWaitersLocked();
+                return null;
+            }
+
+            while (!closed && eligibleAnyCountLocked() < desired){
+                anyWaiters++;
+                try {
+                    unlock();
+                    anyWake.acquireUninterruptibly();
+                } finally {
+                    lock();
+                    anyWaiters--;
+                }
+            }
+
+            if (closed) {
+                signalWaitersLocked();
+                return null;
+            }
+
+            final boolean restricted = waitingVeg > 0;
+            final List<SliceType> out = new ArrayList<>(desired);
+
+            int remaining = desired;
+            final Deque<SliceType> rebuilt = new ArrayDeque<>(buffet.size());
+
+            while (!buffet.isEmpty()) {
+                final SliceType s = buffet.removeFirst();
+                final boolean eligible = !restricted || !s.isVeg();
+
+                if (remaining > 0 && eligible) {
+                    out.add(s);
+                    remaining--;
+                    if (s.isVeg()) {
+                        vegCount--;
+                    } else {
+                        nonVegCount--;
+                    }
+                    spaceAvailable.release();
+                } else {
+                    rebuilt.addLast(s);
+                }
+            }
+
+            buffet.addAll(rebuilt);
+
+            signalWaitersLocked();
+            return out;
+        } finally {
+            unlock();
+        }
     }
 
     /**
@@ -123,11 +241,70 @@ public class BuffetSemaphore implements Buffet {
      */
     @Override
     public List<SliceType> TakeVeg(final int desired){
-        // TODO: validate desired
-        // TODO: increment waitingVeg before blocking; decrement after unblocking
-        // TODO: block until desired vegetarian slices are available or buffet is closed
-        // TODO: return slices in FIFO order
-        return null;
+        if (desired < 0 || desired > maxSlices) {
+            throw new IllegalArgumentException("desired must be between 0 and " + maxSlices + ".");
+        }
+        if (desired == 0) {
+            return List.of();
+        }
+
+        boolean countedAsWaiting = false;
+
+        lock();
+        try {
+            if (closed){
+                signalWaitersLocked();
+                return null;
+            }
+
+            waitingVeg++;
+            countedAsWaiting = true;
+
+            while (!closed && vegCount < desired) {
+                vegWaiters++;
+                try {
+                    unlock();
+                    vegWake.acquireUninterruptibly();
+                } finally {
+                    lock();
+                    vegWaiters--;
+                }
+            }
+
+            if (closed) {
+                signalWaitersLocked();
+                return null;
+            }
+
+            final List<SliceType> out = new ArrayList<>(desired);
+            int remaining = desired;
+            final Deque<SliceType> rebuilt = new ArrayDeque<>(buffet.size());
+
+            while (!buffet.isEmpty()) {
+                final SliceType s = buffet.removeFirst();
+                if (remaining > 0 && s.isVeg()) {
+                    out.add(s);
+                    remaining--;
+                    vegCount--;
+                    spaceAvailable.release();
+                } else {
+                    rebuilt.addLast(s);
+                }
+            }
+            buffet.addAll(rebuilt);
+
+            // State changes: wake blocked patrons to re-check conditions
+            signalWaitersLocked();
+            return out;
+
+        } finally {
+            if (countedAsWaiting){
+                waitingVeg--;
+            }
+            // wake patrons to re-check
+            signalWaitersLocked();
+            unlock();
+        }
     }
 
     /**
@@ -146,10 +323,62 @@ public class BuffetSemaphore implements Buffet {
      */
     @Override
     public boolean AddPizza(final int count, final SliceType stype) {
-        // TODO: validate count and stype
-        // TODO: add slices up to capacity; block if remaining slices cannot be added yet
-        // TODO: return false if closed occurs before completion
-        return false;
+        if (count < 0) {
+            throw new IllegalArgumentException("count must be positive");
+        }
+        if (stype == null) {
+            throw new NullPointerException("stype must not be null");
+        }
+        if (count == 0) {
+            return true;
+        }
+
+        int remaining = count;
+
+        while (remaining > 0) {
+
+            // Register as an adder that may block, under mutex
+            lock();
+            try {
+                if (closed) {
+                    return false;
+                }
+                addWaiters++;
+            } finally {
+                unlock();
+            }
+
+            // Block until a slot is available
+            spaceAvailable.acquireUninterruptibly();
+
+            // Now released, unregister as a waiter and either add or fail on close
+            lock();
+            try {
+                addWaiters--;
+
+                if (closed) {
+                    // Give the slot back and stop immediately
+                    spaceAvailable.release();
+                    return false;
+                }
+
+                // Add exactly one slice
+                buffet.addLast(stype);
+                if (stype.isVeg()) {
+                    vegCount++;
+                } else {
+                    nonVegCount++;
+                }
+                remaining--;
+
+                // Wake patrons who may now be satisfied
+                signalWaitersLocked();
+            } finally {
+                unlock();
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -165,6 +394,87 @@ public class BuffetSemaphore implements Buffet {
      */
     @Override
     public void close() {
-        // TODO: mark closed and wake any blocked threads as required by the semaphore design
+        lock();
+        if (closed) {
+            unlock();
+            return;
+        }
+        closed = true;
+
+        // Unblock blocked patrons
+        signalWaitersLocked();
+
+        // Unblock adders potentially stuck on spaceAvailable
+        for (int i = 0; i < addWaiters; i++) {
+            spaceAvailable.release();
+        }
+
+        unlock();
+    }
+
+// Helpers
+
+    /**
+     * Acquires mutual exclusion protecting all shared state.
+     *
+     * <p>Uses uninterruptible acquisition to satisfy "handle interrupts internally".</p>
+     */
+    private void lock() {
+        mutex.acquireUninterruptibly();
+    }
+
+    /**
+     * Releases mutual exclusion protecting all shared state.
+     */
+    private void unlock() {
+        mutex.release();
+    }
+
+    /**
+     * Wakes blocked patron threads so they can re-check eligibility.
+     *
+     * <p>Must be called while holding {@link #mutex}. If the buffet is closed,
+     * this performs a true broadcast (releasing one permit per blocked waiter)
+     * so all blocked patrons can return {@code null}. Otherwise, it releases at
+     * most one permit for each waiter class (veg/any) to prompt progress without
+     * stampeding.</p>
+     */
+    private void signalWaitersLocked(){
+        // mutex MUST already be held
+
+        // If closed, wake everybody (broadcast)
+        if (closed) {
+            for (int i = 0; i < anyWaiters; i++) {
+                anyWake.release();
+            }
+            for (int i = 0; i < vegWaiters; i++) {
+                vegWake.release();
+            }
+            return;
+        }
+
+        // Not closed: nudge at most one waiter from each queue to re-check conditions
+        if (vegWaiters > 0) {
+            vegWake.release();
+        }
+        if (anyWaiters > 0) {
+            anyWake.release();
+        }
+    }
+
+    /**
+     * Computes the number of slices currently eligible for {@code TakeAny}.
+     *
+     * <p>If any vegetarian patrons are waiting, non-vegetarian patrons may only take
+     * non-vegetarian slices (Meat/Works). Otherwise, they may take any slice type.</p>
+     *
+     * <p>Must be called while holding {@link #mutex}.</p>
+     */
+    private int eligibleAnyCountLocked() {
+        // mutex MUST already be held
+        if (waitingVeg > 0) {
+            return nonVegCount;
+        }
+        return vegCount + nonVegCount;
     }
 }
