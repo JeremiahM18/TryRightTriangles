@@ -137,7 +137,7 @@ public class BuffetLock implements Buffet{
             final List<SliceType> out = new ArrayList<>(desired);
             removeOldestEligibleAnySlicesLocked(desired, out);
 
-            // State changed: space available and/ot eligibility changed
+            // State changed: space available and/or eligibility changed
             canAdd.signalAll();
             canTake.signalAll();
             return out;
@@ -199,9 +199,9 @@ public class BuffetLock implements Buffet{
         } finally {
             if (countedAsWaiting) {
                 waitingVeg--;
+                // waitingVeg affects TakeAny eligibility; wake everyone to re-check
+                canAdd.signalAll();
             }
-            // waitingVeg affects TakeAny eligibility; wake everyone to re-check
-            canTake.signalAll();
             lock.unlock();
         }
     }

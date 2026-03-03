@@ -22,7 +22,7 @@ import java.util.concurrent.Semaphore;
  * Shared state (queue, counters, and closed flag) is protected by {@link #mutex}.</p>
  *
  * <p>Because semaphores do not provide condition variables, this class uses two
- * condition queses using semaphores: one for {@code TakeAny} patrons
+ * condition queues using semaphores: one for {@code TakeAny} patrons
  * ({@link #anyWake}/{@link #anyWaiters}) and one for {@code TakeVeg} patrons
  * ({@link #vegWake}/{@link #vegWaiters}). Waiters block on their respective
  * semaphore and are released when buffet state changes or the buffet closes.</p>
@@ -324,7 +324,7 @@ public class BuffetSemaphore implements Buffet {
     @Override
     public boolean AddPizza(final int count, final SliceType stype) {
         if (count < 0) {
-            throw new IllegalArgumentException("count must be positive");
+            throw new IllegalArgumentException("count must be >= 0");
         }
         if (stype == null) {
             throw new NullPointerException("stype must not be null");
@@ -454,10 +454,10 @@ public class BuffetSemaphore implements Buffet {
         }
 
         // Not closed: nudge at most one waiter from each queue to re-check conditions
-        if (vegWaiters > 0) {
+        for (int i = 0; i < vegWaiters; i++) {
             vegWake.release();
         }
-        if (anyWaiters > 0) {
+        for (int i = 0; i < anyWaiters; i++) {
             anyWake.release();
         }
     }

@@ -84,11 +84,11 @@ public class BuffetMonitor implements Buffet {
         if (desired < 0 || desired > maxSlices) {
             throw new IllegalArgumentException("desired must be between 0 and " + maxSlices + ".");
         }
+        if (desired == 0) {
+            return List.of();
+        }
         if (closed) {
             return null;
-        }
-        if (desired == 0) {
-            return new ArrayList<>(0);
         }
 
         while (!closed && countEligibleAnySlices() < desired) {
@@ -128,11 +128,11 @@ public class BuffetMonitor implements Buffet {
         if (desired < 0 || desired > maxSlices) {
             throw new IllegalArgumentException("desired must be between 0 and " + maxSlices + ".");
         }
+        if (desired == 0) {
+            return List.of();
+        }
         if (closed) {
             return null;
-        }
-        if (desired == 0) {
-            return new ArrayList<>(0);
         }
 
         waitingVeg++;
@@ -152,7 +152,7 @@ public class BuffetMonitor implements Buffet {
             // Remove the oldest vegetarian slices (FIFO among veg)
             final List<SliceType> result = new ArrayList<>(desired);
             removeOldestVegSlices(desired, result);
-
+            notifyAll();
             return result;
         } finally {
             waitingVeg--;
@@ -183,11 +183,11 @@ public class BuffetMonitor implements Buffet {
         if (sType == null) {
             throw new NullPointerException("sType must not be null.");
         }
-        if (closed) {
-            return false;
-        }
         if (count == 0){
             return true;
+        }
+        if (closed) {
+            return false;
         }
 
         int remaining = count;
@@ -313,7 +313,7 @@ public class BuffetMonitor implements Buffet {
      */
     private void removeOldestEligibleAnySlices(final int desired, final List<SliceType> out) {
         int remaining = desired;
-        final boolean  vegRestricted = waitingVeg > 0;
+        final boolean vegRestricted = waitingVeg > 0;
 
         final Deque<SliceType> rebuilt = new ArrayDeque<>(buffet.size());
 
