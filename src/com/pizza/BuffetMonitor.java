@@ -153,9 +153,6 @@ public class BuffetMonitor implements Buffet {
             final List<SliceType> result = new ArrayList<>(desired);
             removeOldestVegSlices(desired, result);
 
-            // Removed slices, space available for servers
-            notifyAll();
-
             return result;
         } finally {
             waitingVeg--;
@@ -196,37 +193,28 @@ public class BuffetMonitor implements Buffet {
         int remaining = count;
 
         while (remaining > 0) {
-            // If closed at any point, stop immediately
-            if (closed) {
-                return false;
-            }
 
-            // Add as many as possible
-            while (!closed && remaining > 0 && buffet.size() < maxSlices) {
-                buffet.addLast(sType);      // newest goes to tail; oldest remains at head
-                remaining--;
-            }
-
-            // wake any waiting takers
-            notifyAll();
-
-            // If done, return success
-            if (remaining == 0) {
-                return true;
-            }
-
-            // Not done, but buffer is full; block until space or close
+            // Wait while Full
             while (!closed && buffet.size() >= maxSlices) {
                 try {
                     wait();
                 } catch (final InterruptedException ignored) {
-                    // Per interface: handle interrupts internally; continue waiting
+                    // Per interface: handle interrupts internally; keep waiting
                 }
             }
 
-            // Loop repeats: either space exists or closed == true
-        }
+            // If closed while waiting, return false immediately
+            if (closed) {
+                return false;
+            }
 
+            // At least one slot exists: add exactly one slice (atomic under monitor)
+            buffet.addLast(sType);      // newest goes to tail; oldest remains at head
+            remaining--;
+
+            // wake takers/servers
+            notifyAll();
+        }
         return true;
     }
 

@@ -422,7 +422,8 @@ public final class TestDriver {
 
         // With no further patrons, server cannot complete AddPizza(10)
         sleepMs(SHORT_MS);
-        require(server.isAlive(), "Test 5: server should still be running (blocked after filling capacity)");
+        require(addResult.get() == null,
+                "Test 5: AddPizza should still be blocked and not returned yet");
 
         // Close; server must return false
         buffet.close();
