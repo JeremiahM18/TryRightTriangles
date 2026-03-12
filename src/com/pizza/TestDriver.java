@@ -96,8 +96,8 @@ public final class TestDriver {
         final int maxSlices = 20;
 
         // REQUIRED: single line to choose implementation:
-        selected = new BuffetMonitor(maxSlices);
-        // selected = new BuffetSemaphore(maxSlices);
+        // selected = new BuffetMonitor(maxSlices);
+        selected = new BuffetSemaphore(maxSlices);
         // selected = new BuffetLock(maxSlices);
 
         log("=== TestDriver starting ===");
