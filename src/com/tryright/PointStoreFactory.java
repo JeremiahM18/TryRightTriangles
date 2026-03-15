@@ -8,10 +8,12 @@
 
 package com.tryright;
 
+import java.io.IOException;
+
 /**
  * Factory for creating PointStore implementations based on input file type.
  *
- * <p>This class centralized the police for selecting an appropriate
+ * <p>This class centralized the policy for selecting an appropriate
  * PointStore implementation, allowing storage decisions to remain
  * decoupled from computational logic.</p>
  *
@@ -29,21 +31,23 @@ public class PointStoreFactory {
     }
 
     /**
-     * Create an appropriate PointStore for the given file.
+     * Create an appropriate PointStore implementation based on the file name.
      *
      * @param filename path to the point file
-     * @return PointStore implementation
-     * @throws IllegalArgumentException if filename is null or fails validation
+     * @return a PointStore implementation capable of accessing the file
+     * @throws IOException if filename cannot be opened or validated
      */
-    public static PointStore open(final String filename) {
+    public static PointStore open(final String filename) throws IOException {
         if (filename == null) {
-            throw new IllegalArgumentException("filename cannot be null");
+            throw new IOException("filename cannot be null");
         }
 
+        // Files ending in .dat are treated as binary point files
         if (filename.endsWith(".dat")) {
             return new BinPointStore(filename);
         }
 
+        // All other files are assumed to be text point lists
         return new TextPointStore(filename);
     }
 }
