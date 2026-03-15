@@ -67,20 +67,20 @@ public class BinPointStore implements PointStore {
      * @throws IllegalArgumentException if filename is null or file is invalid
      * @throws RuntimeException if file cannot be mapped
      */
-    public BinPointStore(final String filename) {
+    public BinPointStore(final String filename) throws IOException {
         Objects.requireNonNull(filename, "filename cannot be null");
 
         try {
             File file = new File(filename);
 
             if (!file.exists()) {
-                throw new IllegalArgumentException("File does not exist: " + filename);
+                throw new IOException("File does not exist: " + filename);
             }
             if (!file.isFile()) {
-                throw new IllegalArgumentException("Not a file: " + filename);
+                throw new IOException("Not a file: " + filename);
             }
             if (!file.canRead()) {
-                throw new IllegalArgumentException("File cannot be read: " + filename);
+                throw new IOException("File cannot be read: " + filename);
             }
 
             randomAccessFile = new RandomAccessFile(file, "r");

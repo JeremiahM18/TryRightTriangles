@@ -45,12 +45,12 @@ public final class TextPointStore implements PointStore {
      * fast indexed access during triangle counting.</p>
      *
      * @param filename path to the text-encoded point file
-     * @throws IllegalArgumentException if filename is null, unreadable
-     *                                  or contains malformed data.
+     * @throws IOException if filename is null, unreadable
+     *                                  or contains malformed data
      */
-    public TextPointStore(final String filename) {
+    public TextPointStore(final String filename) throws IOException {
         if (filename == null) {
-            throw new IllegalArgumentException("Filename cannot be null");
+            throw new IOException("Filename cannot be null");
         }
 
         /*
@@ -74,7 +74,7 @@ public final class TextPointStore implements PointStore {
 
                 final String[] tokens = trimmed.split("\\s+");
                 if (tokens.length != 2) {
-                    throw new IllegalArgumentException(
+                    throw new IOException(
                             "Invalid point at line " + lineNumber + ": expected 2 integers"
                     );
                 }
@@ -83,17 +83,12 @@ public final class TextPointStore implements PointStore {
                     xList.add(Integer.parseInt(tokens[0]));
                     yList.add(Integer.parseInt(tokens[1]));
                 } catch (NumberFormatException e) {
-                    throw new IllegalArgumentException(
+                    throw new IOException(
                             "Non-integer value at line " + lineNumber,
                             e
                     );
                 }
             }
-        } catch (final IOException e) {
-            throw new IllegalArgumentException(
-                    "Failed to read point file: " + filename,
-                    e
-            );
         }
 
         xs = new int[xList.size()];
@@ -106,14 +101,14 @@ public final class TextPointStore implements PointStore {
     }
 
     /**
-     * Returns the X coordinate of the point at the specified index
+     * Returns the X coordinate of the point at the specified index.
      *
      * @param idx index of the point
      * @return X coordinate
      * @throws IndexOutOfBoundsException if idx is outside valid range
      */
     @Override
-    public int getX(final int idx){
+    public int getX(final int idx) {
         checkIndex(idx);
         return xs[idx];
     }
@@ -126,16 +121,19 @@ public final class TextPointStore implements PointStore {
      * @throws IndexOutOfBoundsException if idx is outside valid range
      */
     @Override
-    public int getY(final int idx){
+    public int getY(final int idx) {
         checkIndex(idx);
         return ys[idx];
     }
 
     /**
-     * Returns the number of points stored in the data stare
+     * Returns the number of points stored in the data store.
+     *
+     * @return number of stored points
      */
     @Override
     public int numPoints() {
+
         return xs.length;
     }
 
@@ -150,7 +148,7 @@ public final class TextPointStore implements PointStore {
     }
 
     /**
-     * Validate the index is within the valid range.
+     * Validates the index is within the valid range.
      *
      * @param idx index to validate
      * @throws IndexOutOfBoundsException if index is out of range

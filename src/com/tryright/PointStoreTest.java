@@ -1,8 +1,5 @@
-package com.tryright.test;
+package com.tryright;
 
-import com.tryright.BinPointStore;
-import com.tryright.PointStore;
-import com.tryright.TextPointStore;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
