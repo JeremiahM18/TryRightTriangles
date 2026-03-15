@@ -45,8 +45,7 @@ public final class TextPointStore implements PointStore {
      * fast indexed access during triangle counting.</p>
      *
      * @param filename path to the text-encoded point file
-     * @throws IOException if filename is null, unreadable
-     *                                  or contains malformed data
+     * @throws IOException if filename is null, unreadable, or contains malformed data
      */
     public TextPointStore(final String filename) throws IOException {
         if (filename == null) {
@@ -91,6 +90,9 @@ public final class TextPointStore implements PointStore {
             }
         }
 
+        // Parsing uses dynamic lists because the number of points is not known
+        // in advance. After validation, the data is copied into arrays to provide
+        // compact storage and fast indexed access
         xs = new int[xList.size()];
         ys = new int[yList.size()];
 
@@ -133,7 +135,6 @@ public final class TextPointStore implements PointStore {
      */
     @Override
     public int numPoints() {
-
         return xs.length;
     }
 
@@ -148,7 +149,7 @@ public final class TextPointStore implements PointStore {
     }
 
     /**
-     * Validates the index is within the valid range.
+     * Validates that the index is within the valid range.
      *
      * @param idx index to validate
      * @throws IndexOutOfBoundsException if index is out of range
