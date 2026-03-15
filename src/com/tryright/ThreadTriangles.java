@@ -9,6 +9,7 @@
 package com.tryright;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.Objects;
 
 /**
@@ -76,70 +77,70 @@ public class ThreadTriangles {
         final PointStore store;
         try {
             store = PointStoreFactory.open(inputFile.getPath());
-        } catch (IllegalArgumentException e) {
-            // loadPoints uses IllegalArgumentException for validation and format errors
+        } catch (IOException e) {
             System.err.println("Error: " + e.getMessage());
             printUsage();
             System.exit(EXIT_FORMAT_ERROR);
             return;     // unreachable
         }
 
-        final int totalPoints = store.numPoints();
+        try {
+            final int totalPoints = store.numPoints();
 
-        if (totalPoints == 0) {
-            System.err.println("Error: input file contains no points");
-            System.exit(EXIT_FORMAT_ERROR);
-        }
-
-        // Don't create more threads than pivot points
-        final int actualThreads = Math.min(threadCount, totalPoints);
-
-        // Shared memory for results (one slot per thread).
-        final long[] partialCounts = new long[actualThreads];
-        final Thread[] threads = new Thread[actualThreads];
-
-        // Partition pivots into contiguous batches for each thread.
-        final int batchSize = (totalPoints + actualThreads - 1) / actualThreads;
-
-        int taskIndex = 0;
-
-        // Each thread processes a subset of pivot points
-        // Partial results are stored in separate array slots to avoid synchronization.
-        for (int i = 0; i < actualThreads; i++) {
-            final int start = i * batchSize;
-            if (start >= totalPoints) {
-                break;
+            if (totalPoints == 0) {
+                System.err.println("Error: input file contains no points");
+                System.exit(EXIT_FORMAT_ERROR);
             }
 
-            final int end = Math.min(start + batchSize, totalPoints);
+            // Don't create more threads than pivot points
+            final int actualThreads = Math.min(threadCount, totalPoints);
 
-            final TriangleCounterTask task =
-                    new TriangleCounterTask(store, start, end, partialCounts, taskIndex);
+            // Each thread writes to its own slot, so result aggregation does not
+            // require synchronization
+            final long[] partialCounts = new long[actualThreads];
+            final Thread[] threads = new Thread[actualThreads];
 
-            threads[taskIndex] = new Thread(task, "TriangleCounter-" + taskIndex);
-            threads[taskIndex].start();
-            taskIndex++;
-        }
+            // Split the pivot range into contiguous batches so each thread handles
+            // a predictable slice of the search space
+            final int batchSize = (totalPoints + actualThreads - 1) / actualThreads;
 
-        // Join all threads and aggregate partial results
-        long total = 0;
+            int taskIndex = 0;
 
-        for (int j = 0; j < taskIndex; j++) {
-            try {
-                threads[j].join();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                System.err.println("Error: main thread interrupted while waiting for workers: "
-                        + e.getMessage());
-                System.exit(EXIT_IO_ERROR);
+            for (int i = 0; i < actualThreads; i++) {
+                final int start = i * batchSize;
+                if (start >= totalPoints) {
+                    break;
+                }
+
+                final int end = Math.min(start + batchSize, totalPoints);
+
+                final TriangleCounterTask task =
+                        new TriangleCounterTask(store, start, end, partialCounts, taskIndex);
+
+                threads[taskIndex] = new Thread(task, "TriangleCounter-" + taskIndex);
+                threads[taskIndex].start();
+                taskIndex++;
             }
-            total += partialCounts[j];
+
+            // Join all threads and aggregate partial results
+            long total = 0;
+
+            for (int j = 0; j < taskIndex; j++) {
+                try {
+                    threads[j].join();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    System.err.println("Error: main thread interrupted while waiting for workers: "
+                            + e.getMessage());
+                    System.exit(EXIT_IO_ERROR);
+                }
+                total += partialCounts[j];
+            }
+
+            System.out.println(total);
+        } finally {
+            store.close();
         }
-
-        // Release any resources held by the point store
-        store.close();
-
-        System.out.println(total);
     }
 
     /**

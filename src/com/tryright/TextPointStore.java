@@ -11,14 +11,16 @@ package com.tryright;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * PointStore implementation for text-encoded point files.
  *
- * <p>Each non-empty line must contain a pair of integers representing
+ * <p>The first non-empty line contains the number of points in the file.
+ * Each following non-empty line must contain a pair of integers representing
  * the x and y coordinates of a point.</p>
+ *
+ * <p>Points are stored internally in arrays to allow fast indexed access
+ * during triangle counting.</p>
  *
  * @author Jeremiah McDonald
  */
@@ -37,9 +39,13 @@ public final class TextPointStore implements PointStore {
     /**
      * Constructs a TextPointStore backed by a text point file.
      *
+     * <p>The file format requires the first non-empty line to contain the
+     * number of points in the file. Each subsequent non-empty line must
+     * contain two integer representing the x and y coordinates of a point.</p>
+     *
      * <p>All parsing and validation is performed during construction.
-     * Once created, the store provides read-only access to the
-     * parsed point data.</p>
+     * Points are stored internally in arrays to allow efficient indexed
+     * access during triangle counting.</p>
      *
      * <p>This implementation loads all points into memory to provide
      * fast indexed access during triangle counting.</p>
@@ -52,17 +58,14 @@ public final class TextPointStore implements PointStore {
             throw new IOException("Filename cannot be null");
         }
 
-        /*
-         * Temporary lists allow dynamic growth while parsing the file.
-         * Data is copied into fixed-size arrays after validation.
-         */
-        final List<Integer> xList = new ArrayList<>();
-        final List<Integer> yList = new ArrayList<>();
-
         try (BufferedReader reader = new BufferedReader(new FileReader(filename))) {
             String line;
             int lineNumber = 0;
+            int pointCount = -1;
 
+            /*
+             * Read the first non-empty line as the declared number of points.
+             */
             while ((line = reader.readLine()) != null) {
                 lineNumber++;
 
@@ -71,34 +74,58 @@ public final class TextPointStore implements PointStore {
                     continue;
                 }
 
+                try {
+                    pointCount = Integer.parseInt(trimmed);
+                } catch (NumberFormatException e) {
+                    throw new IOException("Invalid point count at line " + lineNumber, e);
+                }
+
+                if (pointCount < 0) {
+                    throw new IOException("Negative point count at line " + lineNumber);
+                }
+
+                break;
+            }
+
+            xs = new int[pointCount];
+            ys = new int[pointCount];
+
+            int index = 0;
+
+            while ((line = reader.readLine()) != null) {
+                lineNumber++;
+                final String trimmed = line.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+
+                if (index >= pointCount) {
+                    throw new IOException("Too many points in file");
+                }
+
                 final String[] tokens = trimmed.split("\\s+");
                 if (tokens.length != 2) {
                     throw new IOException(
-                            "Invalid point at line " + lineNumber + ": expected 2 integers"
+                            "Invalid point count at line " + lineNumber + ": expected 2 integers"
                     );
                 }
 
                 try {
-                    xList.add(Integer.parseInt(tokens[0]));
-                    yList.add(Integer.parseInt(tokens[1]));
+                    xs[index] = Integer.parseInt(tokens[0]);
+                    ys[index] = Integer.parseInt(tokens[1]);
                 } catch (NumberFormatException e) {
                     throw new IOException(
-                            "Non-integer value at line " + lineNumber,
+                            "Invalid point count at line " + lineNumber,
                             e
                     );
                 }
+
+                index++;
             }
-        }
 
-        // Parsing uses dynamic lists because the number of points is not known
-        // in advance. After validation, the data is copied into arrays to provide
-        // compact storage and fast indexed access
-        xs = new int[xList.size()];
-        ys = new int[yList.size()];
-
-        for (int i = 0; i < xList.size(); i++) {
-            xs[i] = xList.get(i);
-            ys[i] = yList.get(i);
+            if (index != pointCount) {
+                throw new IOException("Point count mismatch: expected " + pointCount + " but found " + index);
+            }
         }
     }
 

@@ -6,6 +6,7 @@
 
 package com.tryright;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -108,7 +109,7 @@ public final class Triangles {
         // Open point store
         try {
             store = PointStoreFactory.open(filename);
-        } catch (IllegalArgumentException e) {
+        } catch (IOException e) {
             System.err.println("Error: " + e.getMessage());
             System.exit(EXIT_FORMAT_ERROR);
             return;
